@@ -256,7 +256,15 @@ pub fn skills_dir() -> PathBuf {
     {
         return path;
     }
-    base_dir().join("skills")
+    // V1 canonical skill library is ~/.agents/skills, not ~/.skills-manager/skills.
+    // App metadata (DB, cache, logs) still lives under base_dir().
+    // Exception: tests and CLI `--skills-root` overrides keep the old
+    // `base_dir()/skills` mapping so temp-dir isolation (and external roots)
+    // keep working; only the default app runtime uses the canonical path.
+    if base_dir_override_active() {
+        return base_dir().join("skills");
+    }
+    super::paths::user_agents_skills_dir()
 }
 
 /// Derive a stable per-skills-root state directory under the user's default base.

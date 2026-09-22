@@ -442,6 +442,23 @@ impl SkillStore {
         Ok(())
     }
 
+    /// Point a skill record at a new on-disk location (V1 canonical migration).
+    /// Only the path (+ hash) moves; source metadata is untouched.
+    pub fn update_skill_central_path(
+        &self,
+        id: &str,
+        central_path: &str,
+        content_hash: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        conn.execute(
+            "UPDATE skills SET central_path = ?1, content_hash = ?2, updated_at = ?3 WHERE id = ?4",
+            params![central_path, content_hash, now, id],
+        )?;
+        Ok(())
+    }
+
     // ── Targets ──
 
     pub fn insert_target(&self, target: &SkillTargetRecord) -> Result<()> {

@@ -646,17 +646,14 @@ fn update_agent_local_skill_from_center(
 
 #[tauri::command]
 pub async fn delete_global_local_skill(
-    store: State<'_, Arc<SkillStore>>,
-    agent: String,
-    skill_relative_path: String,
+    _store: State<'_, Arc<SkillStore>>,
+    _agent: String,
+    _skill_relative_path: String,
 ) -> Result<(), AppError> {
-    let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        delete_agent_local_skill(&store, &agent, &skill_relative_path)
-    })
-    .await?
+    Err(crate::core::v1::blocked_write())
 }
 
+#[allow(dead_code)]
 fn delete_agent_local_skill(
     store: &SkillStore,
     agent: &str,

@@ -1010,101 +1010,13 @@ pub async fn install_git(
 
 #[tauri::command]
 pub async fn install_from_skillssh(
-    source: String,
-    skill_id: String,
-    store: State<'_, Arc<SkillStore>>,
-    cancel_registry: State<'_, Arc<InstallCancelRegistry>>,
-    app_handle: tauri::AppHandle,
+    _source: String,
+    _skill_id: String,
+    _store: State<'_, Arc<SkillStore>>,
+    _cancel_registry: State<'_, Arc<InstallCancelRegistry>>,
+    _app_handle: tauri::AppHandle,
 ) -> Result<(), AppError> {
-    let store = store.inner().clone();
-    let proxy_url = store.proxy_url();
-    let registry = cancel_registry.inner().clone();
-    let cancel_key_owned = format!("{}/{}", source, skill_id);
-    let cancel = registry.register(&cancel_key_owned);
-    let _cancel_guard = CancelRegistrationGuard::new(registry.clone(), cancel_key_owned);
-
-    tauri::async_runtime::spawn_blocking(move || {
-        use tauri::Emitter;
-        let skill_key = format!("{}/{}", source, skill_id);
-        let emit_progress = |phase: &str| {
-            app_handle
-                .emit(
-                    "install-progress",
-                    serde_json::json!({
-                        "skill_id": skill_key,
-                        "phase": phase,
-                    }),
-                )
-                .ok();
-        };
-
-        let outcome = (|| -> Result<(String, String), AppError> {
-            emit_progress("cloning");
-            let repo_url = format!("https://github.com/{}.git", source);
-            let app_for_progress = app_handle.clone();
-            let skill_key_for_progress = skill_key.clone();
-            let progress_cb: git_fetcher::ProgressCallback = Box::new(move |msg: &str| {
-                app_for_progress
-                    .emit(
-                        "install-progress",
-                        serde_json::json!({
-                            "skill_id": skill_key_for_progress,
-                            "phase": "cloning",
-                            "detail": msg,
-                        }),
-                    )
-                    .ok();
-            });
-            let temp_dir = git_fetcher::clone_repo_ref_with_progress(
-                &repo_url,
-                None,
-                Some(&cancel),
-                proxy_url.as_deref(),
-                Some(progress_cb),
-            )
-            .map_err(AppError::classify_git_error)?;
-
-            emit_progress("installing");
-            let install_result = (|| -> Result<(String, String), AppError> {
-                let _lock =
-                    RepoLock::acquire_foreground("install skillssh skill").map_err(AppError::db)?;
-                let skill_dir = resolve_skill_dir(&temp_dir, None, Some(&skill_id))?;
-                let revision = git_fetcher::get_head_revision(&temp_dir).map_err(AppError::git)?;
-                let source_ref = format!("{}/{}", source, skill_id);
-                let (install_name, destination) =
-                    resolve_skillssh_install_target(&store, &source_ref, &skill_id)?;
-                let result = installer::install_skill_dir_to_destination(
-                    &skill_dir,
-                    &install_name,
-                    &destination,
-                )
-                .map_err(AppError::io)?;
-                let metadata = InstallSourceMetadata {
-                    source_type: "skillssh".to_string(),
-                    source_ref: Some(source_ref),
-                    source_ref_resolved: Some(repo_url.clone()),
-                    source_subpath: git_fetcher::relative_subpath(&temp_dir, &skill_dir),
-                    source_branch: None,
-                    source_revision: Some(revision.clone()),
-                    remote_revision: Some(revision),
-                    update_status: "up_to_date".to_string(),
-                };
-                let skill_name = result.name.clone();
-                let new_id = store_installed_skill_unlocked(&store, &result, &metadata, None)?;
-                Ok((new_id, skill_name))
-            })();
-
-            git_fetcher::cleanup_temp(&temp_dir);
-            install_result
-        })();
-
-        log_install_outcome(&store, "skillssh", outcome.as_ref());
-        outcome?;
-
-        emit_progress("done");
-        Ok(())
-    })
-    .await?
+    Err(crate::core::v1::blocked_write())
 }
 
 /// Clone a git repo and return a preview list of skills found, without installing.
@@ -2928,38 +2840,11 @@ pub fn resolve_skillssh_install_target(
 }
 
 pub fn staged_path_for(central_path: &str) -> PathBuf {
-    let path = PathBuf::from(central_path);
-    let file_name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .unwrap_or_else(|| "skill".to_string());
-    path.with_file_name(format!(".{file_name}.staged-{}", uuid::Uuid::new_v4()))
+    crate::core::staged::staged_sibling_for(Path::new(central_path))
 }
 
 pub fn swap_skill_directory(staged_path: &Path, current_path: &Path) -> Result<(), AppError> {
-    let backup_path = current_path.with_file_name(format!(
-        ".{}.backup-{}",
-        current_path
-            .file_name()
-            .map(|name| name.to_string_lossy().to_string())
-            .unwrap_or_else(|| "skill".to_string()),
-        uuid::Uuid::new_v4()
-    ));
-
-    if current_path.exists() {
-        std::fs::rename(current_path, &backup_path)?;
-    }
-
-    if let Err(err) = std::fs::rename(staged_path, current_path) {
-        if backup_path.exists() {
-            let _ = std::fs::rename(&backup_path, current_path);
-        }
-        let _ = remove_path_if_exists(staged_path);
-        return Err(err.into());
-    }
-
-    remove_path_if_exists(&backup_path)?;
-    Ok(())
+    crate::core::staged::swap_dir_staged(staged_path, current_path)
 }
 
 pub fn resync_copy_targets(store: &SkillStore, skill_id: &str) -> Result<(), AppError> {
@@ -3215,12 +3100,7 @@ pub async fn batch_import_folder(
 }
 
 fn remove_path_if_exists(path: &Path) -> Result<(), AppError> {
-    if path.is_dir() {
-        std::fs::remove_dir_all(path)?;
-    } else if path.exists() {
-        std::fs::remove_file(path)?;
-    }
-    Ok(())
+    crate::core::staged::remove_path_if_exists(path)
 }
 
 #[cfg(test)]

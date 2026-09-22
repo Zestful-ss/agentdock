@@ -838,3 +838,133 @@ export const updateGlobalLocalSkillFromCenter = (agent: string, skillRelativePat
 
 export const deleteGlobalLocalSkill = (agent: string, skillRelativePath: string) =>
   invoke<void>("delete_global_local_skill", { agent, skillRelativePath });
+
+// ── V1 Inventory ──
+
+export type SkillLifecycle =
+  | "managed"
+  | "discovered"
+  | "read_only"
+  | "system"
+  | "conflict"
+  | "update_available";
+
+export interface SkillInventoryRow {
+  name: string;
+  status: SkillLifecycle;
+  path: string;
+  source_harness: string;
+  source_display_name: string;
+  description: string | null;
+  fingerprint: string | null;
+  system: boolean;
+  read_only: boolean;
+  native_consumers: string[];
+}
+
+export type McpTransport = "stdio" | "streamable_http" | "legacy_sse" | "unknown";
+
+export interface McpHarnessStatus {
+  harness: string;
+  display_name: string;
+  /** Transport observed in this harness's own config. Never sampled. */
+  transport: McpTransport;
+  /** true/false when stated; null means "Configured" (unknown), never "Enabled". */
+  source_enabled: boolean | null;
+  source_path: string;
+  configured: boolean;
+}
+
+/**
+ * One MCP server name across harnesses. V1 carries no command/args/url/env/
+ * headers/raw_config to the WebView on purpose (inventory, not debugger;
+ * those fields routinely contain secrets).
+ */
+export interface McpInventoryRow {
+  name: string;
+  sources: McpHarnessStatus[];
+}
+
+export interface CanonicalRoots {
+  user_skills: string;
+  native_consumers: string[];
+}
+
+export type CanonicalScope = "user" | "project";
+
+export interface SkillDocument {
+  skill_name: string;
+  filename: string;
+  content: string;
+  path: string;
+}
+
+export interface MigrationEntry {
+  name: string;
+  legacy_path: string;
+  canonical_path: string;
+  outcome: "migrated" | "updated_db_only" | "conflict" | "adopted" | "failed";
+  content_hash: string | null;
+  /** Set only for failed rows. */
+  error: string | null;
+}
+
+export const getSkillInventory = () =>
+  invoke<SkillInventoryRow[]>("get_skill_inventory");
+
+export const getProjectSkillInventory = (projectId: string) =>
+  invoke<SkillInventoryRow[]>("get_project_skill_inventory", { projectId });
+
+export const getMcpInventory = () =>
+  invoke<McpInventoryRow[]>("get_mcp_inventory");
+
+export const adoptSkillToUser = (sourcePath: string, replace?: boolean) =>
+  invoke<string>("adopt_skill_to_user", { sourcePath, replace: replace ?? null });
+
+export const adoptSkillToProject = (
+  sourcePath: string,
+  projectId: string,
+  replace?: boolean
+) =>
+  invoke<string>("adopt_skill_to_project", { sourcePath, projectId, replace: replace ?? null });
+
+export const deleteCanonicalSkill = (
+  skillName: string,
+  scope: CanonicalScope,
+  projectId?: string | null
+) =>
+  invoke<string>("delete_canonical_skill", {
+    skillName,
+    scope,
+    projectId: projectId ?? null,
+  });
+
+export const readCanonicalSkillDocument = (
+  skillName: string,
+  scope: CanonicalScope,
+  projectId?: string | null
+) =>
+  invoke<SkillDocument>("read_canonical_skill_document", {
+    skillName,
+    scope,
+    projectId: projectId ?? null,
+  });
+
+export const saveCanonicalSkillDocument = (
+  skillName: string,
+  content: string,
+  scope: CanonicalScope,
+  projectId?: string | null
+) =>
+  invoke<string>("save_canonical_skill_document", {
+    skillName,
+    content,
+    scope,
+    projectId: projectId ?? null,
+  });
+
+export const runLegacyMigration = () =>
+  invoke<MigrationEntry[]>("run_legacy_migration");
+
+export const getCanonicalRoots = () =>
+  invoke<CanonicalRoots>("get_canonical_roots");

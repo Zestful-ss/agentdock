@@ -3,7 +3,6 @@ import {
   DownloadCloud,
   UploadCloud,
   Github,
-  Box,
   Star,
   TrendingUp,
   Clock,
@@ -47,7 +46,7 @@ export function InstallSkills() {
   const { refreshPresets, refreshManagedSkills, managedSkills, openSkillDetailById } = useApp();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [activeTab, setActiveTab] = useState<"market" | "local" | "git">("market");
+  const [activeTab, setActiveTab] = useState<"market" | "local" | "git">("git");
   const [marketTab, setMarketTab] = useState<"hot" | "trending" | "alltime">("alltime");
   const [marketQuery, setMarketQuery] = useState("");
   const [marketSourceFilter, setMarketSourceFilter] = useState("all");
@@ -721,9 +720,8 @@ export function InstallSkills() {
         <h1 className="app-page-title mb-4">{t("install.title")}</h1>
         <div className="flex gap-1 border-b border-border-subtle">
           {[
-            { id: "market" as const, label: t("install.browseMarket"), icon: Box },
-            { id: "local" as const, label: t("install.localInstall"), icon: UploadCloud },
             { id: "git" as const, label: t("install.gitInstall"), icon: Github },
+            { id: "local" as const, label: t("install.localInstall"), icon: UploadCloud },
           ].map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;

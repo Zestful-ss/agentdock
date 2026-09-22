@@ -1039,6 +1039,17 @@ pub fn run() {
             commands::scan::scan_local_skills,
             commands::scan::import_existing_skill,
             commands::scan::import_all_discovered,
+            // Inventory (V1)
+            commands::inventory::get_skill_inventory,
+            commands::inventory::get_project_skill_inventory,
+            commands::inventory::get_mcp_inventory,
+            commands::inventory::adopt_skill_to_user,
+            commands::inventory::adopt_skill_to_project,
+            commands::inventory::delete_canonical_skill,
+            commands::inventory::read_canonical_skill_document,
+            commands::inventory::save_canonical_skill_document,
+            commands::inventory::run_legacy_migration,
+            commands::inventory::get_canonical_roots,
             // Browse
             commands::browse::fetch_leaderboard,
             commands::browse::search_skillssh,

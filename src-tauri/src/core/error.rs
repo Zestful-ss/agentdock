@@ -47,6 +47,8 @@ pub enum ErrorKind {
     /// A write was refused because the target is not ours to replace. Always
     /// carries `ErrorDetails::TargetConflict`.
     TargetConflict,
+    /// V1 policy: harnesses are discovery sources, not deployment targets.
+    Policy,
 }
 
 impl fmt::Display for AppError {
@@ -67,6 +69,14 @@ impl AppError {
     pub fn invalid_input(msg: impl Into<String>) -> Self {
         Self {
             kind: ErrorKind::InvalidInput,
+            message: msg.into(),
+            details: None,
+        }
+    }
+
+    pub fn policy(msg: impl Into<String>) -> Self {
+        Self {
+            kind: ErrorKind::Policy,
             message: msg.into(),
             details: None,
         }

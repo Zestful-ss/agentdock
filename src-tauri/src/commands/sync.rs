@@ -33,63 +33,35 @@ fn schedule_tray_refresh(app: &AppHandle) {
 }
 
 fn sync_skill_to_tool_internal(
-    store: &SkillStore,
-    skill_id: &str,
-    tool: &str,
+    _store: &SkillStore,
+    _skill_id: &str,
+    _tool: &str,
 ) -> Result<(), AppError> {
-    scenario_service::sync_single_skill_to_tool(
-        store,
-        skill_id,
-        tool,
-        scenario_service::DeployIntent::Managed,
-    )
+    Err(crate::core::v1::blocked_write())
 }
 
 #[tauri::command]
 pub async fn sync_skill_to_tool(
-    app: AppHandle,
-    skill_id: String,
-    tool: String,
-    store: State<'_, Arc<SkillStore>>,
+    _app: AppHandle,
+    _skill_id: String,
+    _tool: String,
+    _store: State<'_, Arc<SkillStore>>,
 ) -> Result<(), AppError> {
-    let store = store.inner().clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        let outcome = (|| -> Result<(), AppError> {
-            sync_skill_to_tool_internal(&store, &skill_id, &tool)?;
-
-            if let Ok(Some(active_id)) = store.get_active_scenario_id() {
-                let skill_ids = store
-                    .get_skill_ids_for_scenario(&active_id)
-                    .map_err(AppError::db)?;
-                if skill_ids.contains(&skill_id) {
-                    let adapter_keys: Vec<String> =
-                        tool_adapters::enabled_installed_adapters(&store)
-                            .iter()
-                            .map(|a| a.key.clone())
-                            .collect();
-                    store
-                        .ensure_scenario_skill_tool_defaults(&active_id, &skill_id, &adapter_keys)
-                        .map_err(AppError::db)?;
-                    store
-                        .set_scenario_skill_tool_enabled(&active_id, &skill_id, &tool, true)
-                        .map_err(AppError::db)?;
-                }
-            }
-
-            Ok(())
-        })();
-        log_sync_outcome(&store, "enable", &skill_id, &tool, outcome.as_ref());
-        outcome
-    })
-    .await?;
-    if result.is_ok() {
-        schedule_tray_refresh(&app);
-    }
-    result
+    Err(crate::core::v1::blocked_write())
 }
 
 #[tauri::command]
 pub async fn unsync_skill_from_tool(
+    _app: AppHandle,
+    _skill_id: String,
+    _tool: String,
+    _store: State<'_, Arc<SkillStore>>,
+) -> Result<(), AppError> {
+    Err(crate::core::v1::blocked_write())
+}
+
+#[allow(dead_code)]
+pub async fn unsync_skill_from_tool_legacy(
     app: AppHandle,
     skill_id: String,
     tool: String,
@@ -259,77 +231,14 @@ pub async fn get_skill_tool_toggles(
 
 #[tauri::command]
 pub async fn set_skill_tool_toggle(
-    app: AppHandle,
-    skill_id: String,
-    preset_id: String,
-    tool: String,
-    enabled: bool,
-    store: State<'_, Arc<SkillStore>>,
+    _app: AppHandle,
+    _skill_id: String,
+    _preset_id: String,
+    _tool: String,
+    _enabled: bool,
+    _store: State<'_, Arc<SkillStore>>,
 ) -> Result<(), AppError> {
-    let store = store.inner().clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        let skill_ids = store
-            .get_skill_ids_for_scenario(&preset_id)
-            .map_err(AppError::db)?;
-        if !skill_ids.contains(&skill_id) {
-            return Err(AppError::not_found("Skill is not enabled in this preset"));
-        }
-
-        let adapter = tool_adapters::find_adapter_with_store(&store, &tool)
-            .ok_or_else(|| AppError::not_found(format!("Unknown tool: {}", tool)))?;
-        let disabled = disabled_tools(&store);
-        let globally_enabled = !disabled.contains(&tool);
-
-        if enabled {
-            if !adapter.is_installed() {
-                return Err(AppError::not_found(format!(
-                    "{} is not installed",
-                    adapter.display_name
-                )));
-            }
-            if !globally_enabled {
-                return Err(AppError::invalid_input(format!(
-                    "{} is disabled",
-                    adapter.display_name
-                )));
-            }
-        }
-
-        sync_metadata::with_repo_lock("set skill tool toggle", || {
-            store.set_scenario_skill_tool_enabled(&preset_id, &skill_id, &tool, enabled)?;
-            sync_metadata::write_all_from_db_unlocked(&store)
-        })
-        .map_err(AppError::db)?;
-
-        let is_active = store
-            .get_active_scenario_id()
-            .map_err(AppError::db)?
-            .as_deref()
-            == Some(preset_id.as_str());
-        if is_active {
-            if enabled {
-                sync_skill_to_tool_internal(&store, &skill_id, &tool)?;
-            } else {
-                let targets = store
-                    .get_targets_for_skill(&skill_id)
-                    .map_err(AppError::db)?;
-                if let Some(target) = targets.iter().find(|target| target.tool == tool) {
-                    // Safe because the app currently guarantees a single active scenario.
-                    sync_engine::remove_target(&PathBuf::from(&target.target_path)).ok();
-                }
-                store
-                    .delete_target(&skill_id, &tool)
-                    .map_err(AppError::db)?;
-            }
-        }
-
-        Ok(())
-    })
-    .await?;
-    if result.is_ok() {
-        schedule_tray_refresh(&app);
-    }
-    result
+    Err(crate::core::v1::blocked_write())
 }
 
 #[cfg(test)]
@@ -376,6 +285,8 @@ mod tests {
         dir
     }
 
+    // Unused since the V1 deploy block; kept for the remaining scenario tests.
+    #[allow(dead_code)]
     fn configure_single_custom_tool(store: &SkillStore, target_base: &std::path::Path) {
         let custom_tools = vec![CustomToolDef {
             key: "test_agent".to_string(),
@@ -533,33 +444,25 @@ mod tests {
 
     #[test]
     fn sync_skill_to_tool_keeps_duplicate_skill_names_separate() {
+        // V1: harness deploys are blocked by policy. The internal entry point
+        // refuses and writes nothing; duplicate-name separation now lives in
+        // the canonical writer (same name → target_conflict, never merged).
         let tmp = tempdir().unwrap();
         let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
-        let source_base = tmp.path().join("central");
         let target_base = tmp.path().join("agent-skills");
-        fs::create_dir_all(&source_base).unwrap();
         fs::create_dir_all(&target_base).unwrap();
-        configure_single_custom_tool(&store, &target_base);
 
-        let first_dir = write_skill_dir(&source_base, "skill123", "first");
-        let second_dir = write_skill_dir(&source_base, "skill123-2", "second");
-        store
-            .insert_skill(&sample_skill("first", "skill123", &first_dir))
-            .unwrap();
-        store
-            .insert_skill(&sample_skill("second", "skill123", &second_dir))
-            .unwrap();
-
-        sync_skill_to_tool_internal(&store, "first", "test_agent").unwrap();
-        sync_skill_to_tool_internal(&store, "second", "test_agent").unwrap();
-
-        assert_eq!(
-            fs::read_to_string(target_base.join("skill123/unique.txt")).unwrap(),
-            "first"
+        let err = sync_skill_to_tool_internal(&store, "first", "test_agent").unwrap_err();
+        assert!(
+            matches!(
+                err.kind,
+                crate::core::error::ErrorKind::Policy
+            ),
+            "expected a V1 policy refusal, got {err:?}"
         );
-        assert_eq!(
-            fs::read_to_string(target_base.join("skill123-2/unique.txt")).unwrap(),
-            "second"
+        assert!(
+            fs::read_dir(&target_base).unwrap().next().is_none(),
+            "blocked deploy must not write anything"
         );
     }
 }

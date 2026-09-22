@@ -944,6 +944,7 @@ pub fn all_tool_adapters(store: &crate::core::skill_store::SkillStore) -> Vec<To
 
     let mut adapters: Vec<ToolAdapter> = default_tool_adapters()
         .into_iter()
+        .filter(|adapter| crate::core::v1::is_v1_adapter(&adapter.key))
         .map(|mut adapter| {
             apply_builtin_path_overrides(&mut adapter, &overrides, &project_overrides);
             adapter
@@ -974,7 +975,10 @@ pub fn find_adapter_with_store(
     let project_overrides = custom_tool_project_paths(store);
     let customs = custom_tools(store);
 
-    if let Some(mut adapter) = default_tool_adapters().into_iter().find(|a| a.key == key) {
+    if let Some(mut adapter) = default_tool_adapters()
+        .into_iter()
+        .find(|a| a.key == key && crate::core::v1::is_v1_adapter(&a.key))
+    {
         apply_builtin_path_overrides(&mut adapter, &overrides, &project_overrides);
         return Some(adapter);
     }
@@ -1054,15 +1058,21 @@ mod tests {
 
     #[test]
     fn custom_omp_agent_collision_keeps_builtin_adapter() {
+        // V1: only allowlisted harnesses resolve as builtins. `omp_agent` is
+        // not in the V1 discovery set, so the builtin never resolves; a
+        // user-defined custom entry with the same key still passes through
+        // (customs are the user's own tools, not harness deploys), and
+        // unrelated customs are untouched.
         let tmp = tempdir().unwrap();
         let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
         let custom_skills = tmp.path().join("custom-skills");
         let custom_project_path = ".custom/skills";
+        let legacy_skills = tmp.path().join("legacy-skills").to_string_lossy().into_owned();
         let custom_tools = vec![
             CustomToolDef {
                 key: "omp_agent".to_string(),
                 display_name: "Legacy Custom OMP".to_string(),
-                skills_dir: tmp.path().join("legacy-skills").to_string_lossy().into_owned(),
+                skills_dir: legacy_skills.clone(),
                 project_relative_skills_dir: Some(".legacy/skills".to_string()),
                 category: ToolCategory::Lobster,
             },
@@ -1079,19 +1089,21 @@ mod tests {
             .unwrap();
 
         let adapters = all_tool_adapters(&store);
-        let matching_adapters: Vec<_> = adapters
+        // No builtin `omp_agent` survives the V1 allowlist …
+        assert!(
+            adapters
+                .iter()
+                .filter(|adapter| adapter.key == "omp_agent")
+                .all(|adapter| adapter.is_custom),
+            "only a custom entry may carry a non-V1 key"
+        );
+        // … but the colliding custom entry passes through with its own identity.
+        let omp = adapters
             .iter()
-            .filter(|adapter| adapter.key == "omp_agent")
-            .collect();
-        assert_eq!(matching_adapters.len(), 1);
-
-        let adapter = matching_adapters[0];
-        assert_eq!(adapter.display_name, "OMP Agent");
-        assert!(!adapter.is_custom);
-        assert_eq!(adapter.category, ToolCategory::Coding);
-        assert_eq!(adapter.relative_skills_dir, ".omp/agent/skills");
-        assert_eq!(adapter.relative_detect_dir, ".omp/agent");
-        assert_eq!(adapter.project_relative_skills_dir(), ".omp/skills");
+            .find(|adapter| adapter.key == "omp_agent")
+            .unwrap();
+        assert_eq!(omp.display_name, "Legacy Custom OMP");
+        assert!(omp.is_custom);
 
         let custom_adapter = adapters
             .iter()
@@ -1103,13 +1115,10 @@ mod tests {
         assert_eq!(custom_adapter.skills_dir(), custom_skills);
         assert_eq!(custom_adapter.project_relative_skills_dir(), custom_project_path);
 
+        // The store-backed lookup resolves the custom entry, never a builtin.
         let found = find_adapter_with_store(&store, "omp_agent").unwrap();
-        assert_eq!(found.display_name, "OMP Agent");
-        assert!(!found.is_custom);
-        assert_eq!(found.category, ToolCategory::Coding);
-        assert_eq!(found.relative_skills_dir, ".omp/agent/skills");
-        assert_eq!(found.relative_detect_dir, ".omp/agent");
-        assert_eq!(found.project_relative_skills_dir(), ".omp/skills");
+        assert_eq!(found.display_name, "Legacy Custom OMP");
+        assert!(found.is_custom);
     }
 
     /// Paths verified against the harness source rather than its README:

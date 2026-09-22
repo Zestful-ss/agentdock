@@ -1,0 +1,144 @@
+{
+  "principle": "Harnesses are discovery sources, not deployment targets.",
+  "canonical": {
+    "userSkills": "%USERPROFILE%\\.agents\\skills",
+    "projectSkills": "<repo>\\.agents\\skills"
+  },
+  "adapters": [
+    {
+      "id": "codex",
+      "name": "Codex",
+      "repo": "https://github.com/openai/codex",
+      "platform": "windows",
+      "nativeConsumer": true,
+      "skills": {
+        "user": ["%USERPROFILE%\\.codex\\skills"],
+        "project": [".codex/skills"],
+        "system": ["%USERPROFILE%\\.codex\\skills\\.system"]
+      },
+      "mcp": {
+        "user": ["%USERPROFILE%\\.codex\\config.toml"]
+      }
+    },
+    {
+      "id": "claude_code",
+      "name": "Claude Code",
+      "repo": "https://github.com/anthropics/claude-code",
+      "platform": "windows",
+      "nativeConsumer": false,
+      "skills": {
+        "user": ["%USERPROFILE%\\.claude\\skills"],
+        "project": [".claude/skills"]
+      },
+      "mcp": {
+        "user": ["%APPDATA%\\Claude\\claude_desktop_config.json", "%USERPROFILE%\\.claude.json"]
+      }
+    },
+    {
+      "id": "opencode",
+      "name": "OpenCode",
+      "repo": "https://github.com/anomalyco/opencode",
+      "platform": "windows",
+      "nativeConsumer": true,
+      "skills": {
+        "user": ["%USERPROFILE%\\.config\\opencode\\skills"],
+        "project": [".opencode/skills"]
+      },
+      "mcp": {
+        "user": ["%USERPROFILE%\\.config\\opencode\\opencode.json"]
+      }
+    },
+    {
+      "id": "deepseek_harness",
+      "name": "DeepSeek Harness",
+      "repo": "https://github.com/deepseek-ai/deepseek-harness",
+      "platform": "windows",
+      "nativeConsumer": true,
+      "skills": {
+        "user": ["%USERPROFILE%\\.dsh\\skills"],
+        "project": [".dsh/skills"]
+      },
+      "mcp": {
+        "user": ["%USERPROFILE%\\.dsh\\settings.yaml"]
+      }
+    },
+    {
+      "id": "kimi",
+      "name": "Kimi Code",
+      "repo": "https://github.com/MoonshotAI/kimi-code",
+      "platform": "windows",
+      "nativeConsumer": true,
+      "skills": {
+        "user": ["%USERPROFILE%\\.kimi-code\\skills", "%USERPROFILE%\\.agents\\skills"],
+        "project": [".kimi-code/skills", ".agents/skills"]
+      },
+      "mcp": {
+        "user": ["%USERPROFILE%\\.kimi-code\\config.json"]
+      }
+    },
+    {
+      "id": "grok",
+      "name": "Grok Build",
+      "repo": "https://github.com/xai-org/grok-build",
+      "platform": "windows",
+      "nativeConsumer": false,
+      "skills": {
+        "user": ["%USERPROFILE%\\.grok\\skills"],
+        "project": [".grok/skills"]
+      },
+      "mcp": {
+        "user": ["%USERPROFILE%\\.grok\\config.toml"]
+      }
+    },
+    {
+      "id": "pi",
+      "name": "Pi",
+      "repo": "https://github.com/earendil-works/pi",
+      "platform": "windows",
+      "nativeConsumer": true,
+      "skills": {
+        "user": ["%USERPROFILE%\\.pi\\agent\\skills"],
+        "project": [".pi/skills"]
+      },
+      "mcp": {
+        "user": ["%USERPROFILE%\\.pi\\mcp.json"]
+      }
+    },
+    {
+      "id": "antigravity",
+      "name": "Antigravity CLI",
+      "repo": "https://github.com/google-antigravity/antigravity-cli",
+      "platform": "windows",
+      "nativeConsumer": false,
+      "skills": {
+        "user": ["%USERPROFILE%\\.gemini\\antigravity\\skills"],
+        "project": [".gemini/antigravity/skills"]
+      },
+      "mcp": {
+        "user": ["%USERPROFILE%\\.gemini\\antigravity\\mcp_config.json"]
+      }
+    },
+    {
+      "id": "maka",
+      "name": "Maka",
+      "repo": null,
+      "platform": "windows",
+      "nativeConsumer": false,
+      "skills": { "user": [], "project": [] },
+      "mcp": {
+        "user": ["%APPDATA%\\Maka\\workspaces\\default\\mcp.json"]
+      }
+    },
+    {
+      "id": "openchamber",
+      "name": "OpenChamber",
+      "repo": "https://github.com/openchamber/openchamber",
+      "platform": "windows",
+      "nativeConsumer": false,
+      "skills": { "user": [], "project": [] },
+      "mcp": {
+        "user": ["%USERPROFILE%\\.config\\openchamber\\settings.json"]
+      }
+    }
+  ]
+}
