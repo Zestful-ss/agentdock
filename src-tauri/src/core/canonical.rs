@@ -915,6 +915,13 @@ mod tests {
         }
     }
 
+    struct SkillsDirGuard;
+    impl Drop for SkillsDirGuard {
+        fn drop(&mut self) {
+            super::super::central_repo::set_runtime_skills_dir_override(None);
+        }
+    }
+
     /// Redirect metadata writes into a temp dir so reconcile tests never touch
     /// the real `~/.skills-manager`.
     fn isolated_base() -> IsolatedBase {
@@ -932,6 +939,11 @@ mod tests {
 
         let _iso = isolated_base();
         let tmp = tempdir().unwrap();
+        // Metadata validation requires record paths inside the skills root.
+        let _skills_guard = SkillsDirGuard;
+        super::super::central_repo::set_runtime_skills_dir_override(Some(
+            tmp.path().to_path_buf(),
+        ));
         let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
         let dir = make_source(tmp.path(), "reconciled", "body");
         let hash = super::super::content_hash::hash_directory(&dir).unwrap();
