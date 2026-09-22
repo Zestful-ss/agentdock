@@ -601,11 +601,8 @@ fn migrate_one_legacy_skill(
     };
     if staged_hash != legacy_hash {
         let _ = super::staged::remove_path_if_exists(&dest);
-        return failed(
-            name,
-            dest.display().to_string(),
-            AppError::internal(format!("Migration copy verification failed for {name}")),
-        );
+        let message = format!("Migration copy verification failed for {name}");
+        return failed(name, dest.display().to_string(), AppError::internal(message));
     }
     if let Err(err) = relink(&staged_hash) {
         return failed(name, dest.display().to_string(), err);

@@ -82,6 +82,7 @@ pub async fn adopt_skill_to_user(
                     source_ref: Some(source.display().to_string()),
                 },
             )
+            .map_err(anyhow::Error::from)
         })
         .map_err(AppError::db)?;
         Ok(dest.display().to_string())
@@ -135,6 +136,7 @@ pub async fn delete_canonical_skill(
             // rows) for the deleted directory. Harness files are never touched.
             sync_metadata::with_repo_lock("delete canonical skill", || {
                 canonical::remove_user_skill_records(&store, &removed)
+                    .map_err(anyhow::Error::from)
             })
             .map_err(AppError::db)?;
             Ok(removed.display().to_string())

@@ -66,7 +66,7 @@ pub fn swap_dir_staged(staged: &Path, current: &Path) -> Result<(), AppError> {
         if backup.exists() || is_link(&backup) {
             let _ = std::fs::rename(&backup, current);
         }
-        let _ = remove_path_if_exists(staged);
+        let _ = remove_path_if_exists(&staged);
         return Err(AppError::io(format!(
             "Failed to move {} into place: {err}",
             current.display()
@@ -133,7 +133,7 @@ pub fn install_via_stage(source: &Path, dest: &Path, replace: bool) -> Result<St
             ));
         }
         if let Err(err) = swap_dir_staged(&staged, dest) {
-            let _ = remove_path_if_exists(staged);
+            let _ = remove_path_if_exists(&staged);
             return Err(err);
         }
         return Ok(staged_hash);
