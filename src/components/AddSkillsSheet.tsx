@@ -30,14 +30,6 @@ import { AgentIcon } from "./AgentIcon";
 import { SkillPickerRow } from "./SkillPickerRow";
 
 const SOURCE_PRIORITY = ["local", "import", "git", "skillssh"];
-const VISIBLE_TARGET_ICON_LIMIT = 5;
-
-export interface GlobalSheetTarget {
-  kind: "global";
-  agentKey: string;
-  agentDisplayName: string;
-  installedSkillIds: Set<string>;
-}
 
 export interface ProjectSheetTarget {
   kind: "project";
@@ -57,7 +49,7 @@ export interface ProjectSheetTarget {
 interface Props {
   open: boolean;
   onClose: () => void;
-  target: GlobalSheetTarget | ProjectSheetTarget;
+  target: ProjectSheetTarget;
   managedSkills: ManagedSkill[];
   /** Called after one or more skills successfully installed. */
   onInstalled: () => Promise<void> | void;
@@ -77,13 +69,13 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
   const [anchorId, setAnchorId] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
 
-  const initialAgents = target.kind === "project" ? target.initialSelectedAgents : [];
+  const initialAgents = target.initialSelectedAgents;
   const [selectedAgents, setSelectedAgents] = useState<string[]>(initialAgents);
   const [showInactiveAgents, setShowInactiveAgents] = useState(false);
 
   const [dirNameMap, setDirNameMap] = useState<Record<string, string>>({});
   const [dirNameMapError, setDirNameMapError] = useState(false);
-  const [dirNameMapLoading, setDirNameMapLoading] = useState(target.kind === "project");
+  const [dirNameMapLoading, setDirNameMapLoading] = useState(true);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -95,7 +87,6 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
 
   // For project mode: precompute slugified dir names for managed skills
   useEffect(() => {
-    if (target.kind !== "project") return;
     let cancelled = false;
     const load = async () => {
       const names = managedSkills.map((s) => s.name);
@@ -129,15 +120,9 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
     return () => {
       cancelled = true;
     };
-  }, [managedSkills, target.kind]);
+  }, [managedSkills]);
 
   const ctx: PickerContext = useMemo(() => {
-    if (target.kind === "global") {
-      return {
-        kind: "global",
-        installedSkillIds: target.installedSkillIds,
-      };
-    }
     return {
       kind: "project",
       selectedAgents,
@@ -293,18 +278,14 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
   const toggleAgent = (key: string) => {
     setSelectedAgents((prev) => {
       const next = prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key];
-      if (target.kind === "project") {
-        target.onPersistLastUsed(next);
-      }
+      target.onPersistLastUsed(next);
       return next;
     });
   };
 
   const setAllEnabledAgents = (next: string[]) => {
     setSelectedAgents(next);
-    if (target.kind === "project") {
-      target.onPersistLastUsed(next);
-    }
+    target.onPersistLastUsed(next);
   };
 
   const selectableSelected = useMemo(
@@ -316,59 +297,13 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
     [selectedIds, managedSkills, ctx],
   );
 
-  const projectCtx = ctx.kind === "project" ? (ctx as ProjectPickerContext) : null;
-  const projectNamesReady = target.kind !== "project" || dirNameMapError || !dirNameMapLoading;
-  const enabledTargets = target.kind === "project"
-    ? target.exportTargets.filter((tt) => tt.installed && tt.enabled)
-    : [];
-  const inactiveTargets = target.kind === "project"
-    ? target.exportTargets.filter((tt) => !tt.installed || !tt.enabled)
-    : [];
-
-  const renderAgentIcons = (
-    agents: { key: string; display_name: string }[],
-    options: { dim?: string; limit?: number } = {},
-  ) => {
-    const dim = options.dim ?? "h-6 w-6";
-    const limit = options.limit ?? VISIBLE_TARGET_ICON_LIMIT;
-    const visible = agents.slice(0, limit);
-    const hiddenCount = agents.length - visible.length;
-
-    return (
-      <span className="flex shrink-0 items-center -space-x-1.5">
-        {visible.map((agent) => (
-          <AgentIcon
-            key={agent.key}
-            agentKey={agent.key}
-            displayName={agent.display_name}
-            className={cn(
-              dim,
-              "rounded-[4px] border border-bg-secondary bg-surface shadow-[0_0_0_1px_var(--color-border-subtle)]",
-            )}
-          />
-        ))}
-        {hiddenCount > 0 && (
-          <span
-            className={cn(
-              dim,
-              "inline-flex items-center justify-center rounded-[4px] border border-bg-secondary bg-surface text-[10px] font-semibold text-muted shadow-[0_0_0_1px_var(--color-border-subtle)]",
-            )}
-            title={`+${hiddenCount}`}
-          >
-            +{hiddenCount}
-          </span>
-        )}
-      </span>
-    );
-  };
+  const projectCtx = ctx as ProjectPickerContext;
+  const projectNamesReady = dirNameMapError || !dirNameMapLoading;
+  const enabledTargets = target.exportTargets.filter((tt) => tt.installed && tt.enabled);
+  const inactiveTargets = target.exportTargets.filter((tt) => !tt.installed || !tt.enabled);
 
   const ctaLabel = (() => {
     const count = selectableSelected.length;
-    if (target.kind === "global") {
-      return count === 0
-        ? t("addFromLibrary.ctaEmpty", { agent: target.agentDisplayName })
-        : t("addFromLibrary.ctaGlobal", { count, agent: target.agentDisplayName });
-    }
     if (selectedAgents.length === 0) {
       return t("addFromLibrary.ctaNoTarget");
     }
@@ -384,35 +319,23 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
     let failed = 0;
     const failures: string[] = [];
     try {
-      if (target.kind === "global") {
-        for (const id of selectableSelected) {
-          try {
-            await api.syncSkillToTool(id, target.agentKey);
-            ok++;
-          } catch (e) {
-            failed++;
-            failures.push(getErrorMessage(e, t("common.error")));
-          }
-        }
-      } else {
-        if (selectedAgents.length === 0) {
-          toast.error(t("addFromLibrary.errors.noTarget"));
-          setInstalling(false);
-          return;
-        }
-        if (!projectCtx || !projectNamesReady) return;
-        for (const id of selectableSelected) {
-          try {
-            const skill = managedSkills.find((s) => s.id === id);
-            if (!skill) continue;
-            const agents = targetsToInstall(skill, projectCtx);
-            if (agents.length === 0) continue;
-            await api.exportSkillToProject(id, target.projectId, agents);
-            ok++;
-          } catch (e) {
-            failed++;
-            failures.push(getErrorMessage(e, t("common.error")));
-          }
+      if (selectedAgents.length === 0) {
+        toast.error(t("addFromLibrary.errors.noTarget"));
+        setInstalling(false);
+        return;
+      }
+      if (!projectNamesReady) return;
+      for (const id of selectableSelected) {
+        try {
+          const skill = managedSkills.find((s) => s.id === id);
+          if (!skill) continue;
+          const agents = targetsToInstall(skill, projectCtx);
+          if (agents.length === 0) continue;
+          await api.exportSkillToProject(id, target.projectId, agents);
+          ok++;
+        } catch (e) {
+          failed++;
+          failures.push(getErrorMessage(e, t("common.error")));
         }
       }
       if (ok > 0) {
@@ -442,21 +365,6 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
   };
 
   const targetSummary = (() => {
-    if (target.kind === "global") {
-      return (
-        <div className="flex items-center gap-2 text-[12px] text-muted">
-          <span className="shrink-0">{t("addFromLibrary.targetLabel")}</span>
-          <span className="inline-flex min-w-0 items-center gap-2 rounded-full border border-border-subtle bg-surface px-2.5 py-1 text-[12px] font-medium text-secondary">
-            {renderAgentIcons([{ key: target.agentKey, display_name: target.agentDisplayName }], {
-              dim: "h-5 w-5",
-              limit: 1,
-            })}
-            <span className="truncate">{target.agentDisplayName}</span>
-          </span>
-        </div>
-      );
-    }
-
     const allSelected =
       enabledTargets.length > 0 && enabledTargets.every((tt) => selectedAgents.includes(tt.key));
     const toggleAll = () => {

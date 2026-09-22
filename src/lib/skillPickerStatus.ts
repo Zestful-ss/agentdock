@@ -2,11 +2,6 @@ import type { ManagedSkill } from "./tauri";
 
 export type PickerStatus = "available" | "installed" | "conflict" | "unavailable";
 
-export interface GlobalPickerContext {
-  kind: "global";
-  installedSkillIds: Set<string>;
-}
-
 export interface ProjectPickerContext {
   kind: "project";
   selectedAgents: string[];
@@ -16,13 +11,9 @@ export interface ProjectPickerContext {
   dirNameMapError: boolean;
 }
 
-export type PickerContext = GlobalPickerContext | ProjectPickerContext;
+export type PickerContext = ProjectPickerContext;
 
 export function classifySkill(skill: ManagedSkill, ctx: PickerContext): PickerStatus {
-  if (ctx.kind === "global") {
-    return ctx.installedSkillIds.has(skill.id) ? "installed" : "available";
-  }
-
   if (ctx.selectedAgents.length === 0) return "unavailable";
 
   const allInstalled = ctx.selectedAgents.every((agent) => {

@@ -30,7 +30,6 @@ interface AppState {
   refreshManagedSkills: () => Promise<void>;
   refreshProjects: () => Promise<void>;
   setViewedPresetId: (id: string) => void;
-  applyPresetToDefault: (id: string) => Promise<void>;
   clearAppError: () => void;
   openHelp: () => void;
   closeHelp: () => void;
@@ -155,14 +154,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // localStorage may be unavailable; selection is still tracked in memory.
     }
   }, []);
-
-  const handleApplyPresetToDefault = useCallback(
-    async (id: string) => {
-      await api.applyPresetToDefault(id);
-      await Promise.all([refreshPresets(), refreshManagedSkills()]);
-    },
-    [refreshManagedSkills, refreshPresets]
-  );
 
   // Resolve viewedPreset: persisted id > activePreset > first preset.
   // Persist whichever resolves so the next launch matches what the user saw.
@@ -457,7 +448,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
         refreshManagedSkills,
         refreshProjects,
         setViewedPresetId,
-        applyPresetToDefault: handleApplyPresetToDefault,
         clearAppError: () => setAppError(null),
         openHelp: () => setHelpOpen(true),
         closeHelp: () => setHelpOpen(false),

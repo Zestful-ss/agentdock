@@ -52,7 +52,6 @@ import { listen } from "@tauri-apps/api/event";
 import { writeText as clipboardWriteText } from "@tauri-apps/plugin-clipboard-manager";
 import { check as checkUpdater } from "@tauri-apps/plugin-updater";
 import { open as dialogOpen, confirm as dialogConfirm } from "@tauri-apps/plugin-dialog";
-import { useNavigate } from "react-router-dom";
 import { cn } from "../utils";
 import { useApp } from "../context/AppContext";
 import { useThemeContext } from "../context/ThemeContext";
@@ -157,7 +156,6 @@ function AgentGroupDnd({ items, sensors, dragLabel, onDragEnd, renderAgentCard }
 
 export function Settings() {
   const { t, i18n } = useTranslation();
-  const navigate = useNavigate();
   const { tools, refreshTools, openHelp, appUpdate, refreshAppUpdate } = useApp();
   const [togglingTools, setTogglingTools] = useState<Set<string>>(new Set());
   const { theme, setTheme } = useThemeContext();
@@ -1615,14 +1613,6 @@ export function Settings() {
               <h3 className="text-[14px] font-semibold text-primary">{t("settings.gitRemoteUrl")}</h3>
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                 <p className="mt-0.5 text-[12px] text-muted">{t("settings.gitSyncConfigDesc")}</p>
-                <button
-                  type="button"
-                  onClick={() => navigate("/backup")}
-                  className={`${actionButtonClass} bg-surface-hover hover:bg-surface-active text-tertiary border-border`}
-                >
-                  <ExternalLink className="w-3 h-3" />
-                  {t("settings.openBackupPage")}
-                </button>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <input

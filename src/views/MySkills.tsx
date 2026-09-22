@@ -22,12 +22,10 @@ import {
   CircleSlash,
   Circle,
   Pencil,
-  Share2,
   Tag,
   Trash2,
 } from "lucide-react";
 import { open as dialogOpen } from "@tauri-apps/plugin-dialog";
-import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { cn } from "../utils";
@@ -38,7 +36,6 @@ import { TagRenameDialog } from "../components/TagRenameDialog";
 import { SkillDetailPanel } from "../components/SkillDetailPanel";
 import { MultiSelectToolbar } from "../components/MultiSelectToolbar";
 import { BatchTagDialog } from "../components/BatchTagDialog";
-import { BatchSyncAgentDialog } from "../components/BatchSyncAgentDialog";
 import { SyncDots } from "../components/SyncDots";
 import { ToggleSwitch } from "../components/ToggleSwitch";
 import { CardActionMenu } from "../components/CardActionMenu";
@@ -46,9 +43,7 @@ import * as api from "../lib/tauri";
 import { getTagActiveColor, getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
 import type {
   ManagedSkill,
-  ToolInfo,
   GitBackupStatus,
-  SkillToolToggle,
 } from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
 import {
@@ -125,24 +120,18 @@ function SortableSkillItem({
   );
 }
 
-function getToolDisplayName(toolKey: string, tools: ToolInfo[]) {
-  return tools.find((tool) => tool.key === toolKey)?.display_name || toolKey;
-}
-
 function centralDirName(skill: ManagedSkill) {
   return skill.central_path.split(/[\\/]/).filter(Boolean).pop() || skill.name;
 }
 
 export function MySkills() {
   const { t } = useTranslation();
-  const navigate = useNavigate();
   const {
     viewedPreset,
     tools,
     managedSkills: skills,
     refreshPresets,
     refreshManagedSkills,
-    refreshTools,
     detailSkillId,
     openSkillDetailById,
     closeSkillDetail,
@@ -164,15 +153,11 @@ export function MySkills() {
   const refreshAfterDeleteRef = useRef<number | null>(null);
   const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false);
   const [batchTagDialogOpen, setBatchTagDialogOpen] = useState(false);
-  const [batchSyncDialogOpen, setBatchSyncDialogOpen] = useState(false);
   const [batchToggling, setBatchToggling] = useState(false);
   const [checkingAll, setCheckingAll] = useState(false);
   const [checkingSkillId, setCheckingSkillId] = useState<string | null>(null);
   const [updatingSkillId, setUpdatingSkillId] = useState<string | null>(null);
   const [batchUpdating, setBatchUpdating] = useState(false);
-  const [toolToggles, setToolToggles] = useState<SkillToolToggle[] | null>(null);
-  const [togglingToolKey, setTogglingToolKey] = useState<string | null>(null);
-  const [togglingTarget, setTogglingTarget] = useState<{ skillId: string; tool: string } | null>(null);
   const [gitStatus, setGitStatus] = useState<GitBackupStatus | null>(null);
   const [gitRemoteConfig, setGitRemoteConfig] = useState("");
   const [tagEditSkillId, setTagEditSkillId] = useState<string | null>(null);
@@ -347,7 +332,7 @@ export function MySkills() {
       filterMode,
       viewedPreset?.id ?? null,
     ]),
-    escapeEnabled: !batchTagDialogOpen && !batchSyncDialogOpen && !batchDeleteConfirm,
+    escapeEnabled: !batchTagDialogOpen && !batchDeleteConfirm,
   });
 
   const selectedSkill = useMemo(
@@ -447,78 +432,6 @@ export function MySkills() {
     }, 400);
     return () => window.clearTimeout(timer);
   }, [skills, refreshGitStatusLocal]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const loadToggles = async () => {
-      if (!selectedSkill || !viewedPreset) {
-        setToolToggles(null);
-        return;
-      }
-      if (!selectedSkill.preset_ids.includes(viewedPreset.id)) {
-        setToolToggles(null);
-        return;
-      }
-      try {
-        const toggles = await api.getSkillToolToggles(selectedSkill.id, viewedPreset.id);
-        if (!cancelled) setToolToggles(toggles);
-      } catch {
-        if (!cancelled) setToolToggles(null);
-      }
-    };
-    loadToggles();
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedSkill, viewedPreset]);
-
-  const handleToggleSkillTool = async (toolKey: string, enabled: boolean) => {
-    if (!selectedSkill || !viewedPreset) return;
-    setTogglingToolKey(toolKey);
-    try {
-      await api.setSkillToolToggle(selectedSkill.id, viewedPreset.id, toolKey, enabled);
-      const displayName = getToolDisplayName(toolKey, tools);
-      toast.success(
-        enabled
-          ? t("mySkills.agentToggleEnabled", { agent: displayName })
-          : t("mySkills.agentToggleDisabled", { agent: displayName })
-      );
-      const [, toggles] = await Promise.all([
-        refreshManagedSkills(),
-        api.getSkillToolToggles(selectedSkill.id, viewedPreset.id),
-      ]);
-      setToolToggles(toggles);
-    } catch (error: unknown) {
-      toast.error(getErrorMessage(error, t("common.error")));
-      await refreshManagedSkills();
-    } finally {
-      setTogglingToolKey(null);
-    }
-  };
-
-  const handleToggleSkillTarget = useCallback(
-    async (skill: ManagedSkill, toolKey: string, enabled: boolean) => {
-      if (togglingTarget) return;
-      setTogglingTarget({ skillId: skill.id, tool: toolKey });
-      const displayName = getToolDisplayName(toolKey, tools);
-      try {
-        if (enabled) {
-          await api.syncSkillToTool(skill.id, toolKey);
-          toast.success(t("mySkills.targetInstalled", { name: skill.name, agent: displayName }));
-        } else {
-          await api.unsyncSkillFromTool(skill.id, toolKey);
-          toast.success(t("mySkills.targetUninstalled", { name: skill.name, agent: displayName }));
-        }
-        await refreshManagedSkills();
-      } catch (error: unknown) {
-        toast.error(getErrorMessage(error, t("common.error")));
-        await refreshManagedSkills();
-      } finally {
-        setTogglingTarget(null);
-      }
-    },
-    [togglingTarget, tools, t, refreshManagedSkills]
-  );
 
   const scheduleRefreshAfterDelete = useCallback(() => {
     if (refreshAfterDeleteRef.current !== null) {
@@ -653,30 +566,6 @@ export function MySkills() {
     } finally {
       setBatchToggling(false);
     }
-  };
-
-  const handleBatchSyncAgents = async (agentKeys: string[]) => {
-    const selectedSkillsList = skills.filter((s) => selectedIds.has(s.id));
-    let synced = 0;
-    let failed = 0;
-    for (const skill of selectedSkillsList) {
-      for (const agentKey of agentKeys) {
-        if (skill.targets.some((target) => target.tool === agentKey)) continue;
-        try {
-          await api.syncSkillToTool(skill.id, agentKey);
-          synced++;
-        } catch {
-          failed++;
-        }
-      }
-    }
-    if (synced > 0) {
-      toast.success(t("mySkills.batchSynced", { count: synced }));
-    }
-    if (failed > 0) {
-      toast.error(t("mySkills.batchSyncFailed", { count: failed }));
-    }
-    await Promise.all([refreshManagedSkills(), refreshTools()]);
   };
 
   const handleBatchRefresh = async () => {
@@ -1160,7 +1049,6 @@ export function MySkills() {
               return (
                 <button
                   type="button"
-                  onClick={() => navigate("/backup")}
                   className={cn(
                     "inline-flex items-center gap-1 rounded-md px-3 py-2 text-[13px] font-medium transition-colors hover:bg-surface-hover hover:text-secondary",
                     meta.className
@@ -1309,12 +1197,6 @@ export function MySkills() {
                   onSelect: handleBatchTogglePreset,
                 }]
               : []),
-            {
-              key: "sync",
-              label: t("mySkills.batchSyncAgents", { count: selectedIds.size }),
-              icon: <Share2 className="h-3.5 w-3.5" />,
-              onSelect: () => setBatchSyncDialogOpen(true),
-            },
             {
               key: "tags",
               label: t("mySkills.batchEditTags", { count: selectedIds.size }),
@@ -1519,13 +1401,12 @@ export function MySkills() {
                     {((badge && !showUpdatePill) || conflictIds.has(skill.id)) && (
                       <div className="mt-2 flex flex-wrap items-center gap-1.5">
                         {conflictIds.has(skill.id) && (
-                          <button
-                            onClick={(e) => { e.stopPropagation(); navigate("/backup"); }}
-                            className="rounded-full bg-amber-500/12 px-2 py-0.5 text-[13px] font-medium text-amber-600 transition-colors hover:bg-amber-500/20 dark:text-amber-400"
+                          <span
+                            className="rounded-full bg-amber-500/12 px-2 py-0.5 text-[13px] font-medium text-amber-600 transition-colors dark:text-amber-400"
                             title={t("mySkills.needsAttentionHint")}
                           >
                             {t("mySkills.needsAttention")}
-                          </button>
+                          </span>
                         )}
                         {badge && !showUpdatePill && (
                           <span
@@ -1647,12 +1528,6 @@ export function MySkills() {
                       skill={skill}
                       tools={tools}
                       limit={6}
-                      onToggle={
-                        isMultiSelect
-                          ? undefined
-                          : (tool, enabled) => handleToggleSkillTarget(skill, tool, enabled)
-                      }
-                      pendingKey={togglingTarget?.skillId === skill.id ? togglingTarget.tool : null}
                     />
                   </div>
                 </div>
@@ -1735,13 +1610,12 @@ export function MySkills() {
 
                 <div className="flex shrink-0 items-center gap-2.5">
                   {conflictIds.has(skill.id) && (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); navigate("/backup"); }}
-                      className="rounded-full bg-amber-500/12 px-2 py-0.5 text-[12px] font-medium text-amber-600 transition-colors hover:bg-amber-500/20 dark:text-amber-400"
+                    <span
+                      className="rounded-full bg-amber-500/12 px-2 py-0.5 text-[12px] font-medium text-amber-600 transition-colors dark:text-amber-400"
                       title={t("mySkills.needsAttentionHint")}
                     >
                       {t("mySkills.needsAttention")}
-                    </button>
+                    </span>
                   )}
                   {hasUpdate && !isMultiSelect ? (
                     <button
@@ -1768,12 +1642,6 @@ export function MySkills() {
                     tools={tools}
                     limit={6}
                     size="sm"
-                    onToggle={
-                      isMultiSelect
-                        ? undefined
-                        : (tool, enabled) => handleToggleSkillTarget(skill, tool, enabled)
-                    }
-                    pendingKey={togglingTarget?.skillId === skill.id ? togglingTarget.tool : null}
                   />
                   <span className="inline-flex items-center gap-1 text-[13px] text-muted">
                     {sourceIcon(skill.source_type)}
@@ -1865,9 +1733,6 @@ export function MySkills() {
         skill={selectedSkill}
         onClose={closeSkillDetail}
         tools={tools}
-        toolToggles={toolToggles}
-        togglingTool={togglingToolKey}
-        onToggleTool={handleToggleSkillTool}
         projects={projects}
         onProjectsChanged={refreshProjects}
       />
@@ -1973,14 +1838,6 @@ export function MySkills() {
         allTags={allTags}
         onClose={() => setBatchTagDialogOpen(false)}
         onApply={handleBatchEditTags}
-      />
-
-      <BatchSyncAgentDialog
-        open={batchSyncDialogOpen}
-        skills={skills.filter((s) => selectedIds.has(s.id))}
-        tools={tools}
-        onClose={() => setBatchSyncDialogOpen(false)}
-        onApply={handleBatchSyncAgents}
       />
     </div>
   );

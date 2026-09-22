@@ -1,5 +1,3 @@
-import { Loader2 } from "lucide-react";
-import { useTranslation } from "react-i18next";
 import type { ProjectAgentTarget } from "../lib/tauri";
 import { cn } from "../utils";
 import { AgentIcon } from "./AgentIcon";
@@ -23,13 +21,6 @@ interface Props {
   limit?: number;
   size?: "sm" | "md";
   className?: string;
-  /**
-   * When provided, each agent dot becomes a button: clicking adds/removes the
-   * skill for that agent in the project. The handler receives the next state.
-   */
-  onToggle?: (agentKey: string, enabled: boolean) => void;
-  /** Agent key currently performing an assign/remove operation; shows a loader on that dot. */
-  pendingKey?: string | null;
 }
 
 export function ProjectAgentDots({
@@ -39,10 +30,7 @@ export function ProjectAgentDots({
   limit,
   size = "md",
   className,
-  onToggle,
-  pendingKey,
 }: Props) {
-  const { t } = useTranslation();
   const assignedSet = new Set(assignedAgents);
   const availableKeys = new Set(targets.filter((t) => t.installed && t.enabled).map((t) => t.key));
 
@@ -92,29 +80,17 @@ export function ProjectAgentDots({
     orphan: " · assigned · agent unavailable",
   };
 
-  const clickHint: Record<DotState, string> = {
-    synced: ` · ${t("project.agentClickRemove")}`,
-    available: ` · ${t("project.agentClickAdd")}`,
-    orphan: ` · ${t("project.agentClickRemove")}`,
-  };
-
   return (
     <div className={cn("flex items-center gap-[2px]", className)}>
       {visible.map((dot) => {
         const useIcon = hasAgentIcon(dot.key);
-        const isPending = pendingKey === dot.key;
-        const interactive = !!onToggle && !isPending;
-        const title = `${dot.displayName}${stateTitle[dot.state]}${onToggle ? clickHint[dot.state] : ""}`;
+        const title = `${dot.displayName}${stateTitle[dot.state]}`;
         const baseClass = cn(
           "inline-flex select-none items-center justify-center overflow-hidden rounded-[4px] transition-colors",
           dim,
           useIcon ? iconStateClass[dot.state] : cn("border font-mono font-semibold tracking-tight", textStateClass[dot.state]),
-          interactive && "cursor-pointer hover:ring-1 hover:ring-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
-          isPending && "opacity-70",
         );
-        const content = isPending ? (
-          <Loader2 className="h-3 w-3 animate-spin text-muted" />
-        ) : useIcon ? (
+        const content = useIcon ? (
           <AgentIcon
             agentKey={dot.key}
             className="h-full w-full rounded-[4px] border-0 bg-transparent"
@@ -122,26 +98,6 @@ export function ProjectAgentDots({
         ) : (
           shortLabel(dot.displayName, dot.key)
         );
-
-        if (onToggle) {
-          return (
-            <button
-              type="button"
-              key={dot.key}
-              title={title}
-              aria-label={title}
-              disabled={isPending}
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                onToggle(dot.key, dot.state === "available");
-              }}
-              className={baseClass}
-            >
-              {content}
-            </button>
-          );
-        }
 
         return (
           <span key={dot.key} title={title} className={baseClass}>
