@@ -24,8 +24,11 @@ pub async fn get_project_skill_inventory(
 ) -> Result<Vec<SkillInventoryRow>, AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let (_, resolved) = canonical::resolve_project_root(&store, &project_id)?;
-        Ok(mcp_inventory::discover_project_skills_at(&resolved.root))
+        let (project_path, resolved) = canonical::resolve_project_root(&store, &project_id)?;
+        Ok(mcp_inventory::discover_project_skills_at(
+            &resolved.root,
+            std::path::Path::new(&project_path),
+        ))
     })
     .await
     .map_err(|e| AppError::internal(e.to_string()))?
