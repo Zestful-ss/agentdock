@@ -26,8 +26,9 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { cn } from "../utils";
 import { useApp } from "../context/AppContext";
+import { useCurrentProject } from "../lib/useCurrentProject";
 import * as api from "../lib/tauri";
-import type { ScanResult, SkillsShSkill, BatchImportResult, GitPreviewResult } from "../lib/tauri";
+import type { ScanResult, SkillsShSkill, BatchImportResult, GitPreviewResult, GitInstallOutcome, GitInstallScope } from "../lib/tauri";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useSearchParams, useNavigate } from "react-router-dom";
@@ -44,6 +45,7 @@ const MARKET_SEARCH_CACHE_MAX_ENTRIES = 150;
 export function InstallSkills() {
   const { t } = useTranslation();
   const { refreshPresets, refreshManagedSkills, managedSkills, openSkillDetailById } = useApp();
+  const { currentProject } = useCurrentProject();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<"market" | "local" | "git">("git");
@@ -64,6 +66,8 @@ export function InstallSkills() {
   const [gitPreview, setGitPreview] = useState<GitPreviewResult | null>(null);
   const [gitPreviewRepoUrl, setGitPreviewRepoUrl] = useState<string | null>(null);
   const [gitSelections, setGitSelections] = useState<{ rel_path: string; name: string; description: string | null; selected: boolean }[]>([]);
+  const [gitScope, setGitScope] = useState<GitInstallScope>("user");
+  const [gitOutcomes, setGitOutcomes] = useState<GitInstallOutcome[] | null>(null);
   const [gitConfirmLoading, setGitConfirmLoading] = useState(false);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [scanLoading, setScanLoading] = useState(false);
@@ -488,6 +492,7 @@ export function InstallSkills() {
       toast.dismiss(toastId);
       setGitPreview(preview);
       setGitPreviewRepoUrl(url);
+      setGitOutcomes(null);
       setGitSelections(preview.skills.map((s) => ({
         rel_path: s.rel_path,
         name: s.name,
@@ -515,27 +520,48 @@ export function InstallSkills() {
     setGitPreview(null);
     setGitPreviewRepoUrl(null);
     setGitSelections([]);
+    setGitOutcomes(null);
   };
 
-  const handleGitConfirm = async () => {
+  const handleGitConfirm = async (replace = false) => {
     if (!gitPreview) return;
     const repoUrl = gitPreviewRepoUrl ?? gitUrl.trim();
     if (!repoUrl) return;
     const selected = gitSelections.filter((s) => s.selected);
     if (selected.length === 0) return;
+    if (gitScope === "project" && !currentProject) {
+      toast.error(t("install.gitPreview.noProject"));
+      return;
+    }
     setGitConfirmLoading(true);
     try {
-      await api.confirmGitInstall(
+      const outcomes = await api.confirmGitInstall(
         repoUrl,
         gitPreview.temp_dir,
-        selected.map((s) => ({ rel_path: s.rel_path, name: s.name }))
+        selected.map((s) => ({ rel_path: s.rel_path, name: s.name })),
+        gitScope,
+        currentProject?.id ?? null,
+        replace
       );
+      setGitOutcomes(outcomes);
+      const installed = outcomes.filter((o) => o.status === "installed");
+      const conflicts = outcomes.filter((o) => o.status === "conflict");
+      const failed = outcomes.filter((o) => o.status === "failed");
       await Promise.all([refreshPresets(), refreshManagedSkills()]);
-      toast.success(t("install.toast.success", { name: selected.map((s) => s.name).join(", ") }));
-      setGitUrl("");
-      setGitPreview(null);
-      setGitPreviewRepoUrl(null);
-      setGitSelections([]);
+      if (conflicts.length === 0 && failed.length === 0) {
+        toast.success(t("install.toast.success", { name: installed.map((s) => s.name).join(", ") }));
+        setGitUrl("");
+        setGitPreview(null);
+        setGitPreviewRepoUrl(null);
+        setGitSelections([]);
+        setGitOutcomes(null);
+      } else {
+        const parts = [`${installed.length} installed`];
+        if (conflicts.length > 0) parts.push(`${conflicts.length} already managed`);
+        if (failed.length > 0) parts.push(`${failed.length} failed`);
+        toast.warning(parts.join(", "));
+        // Dialog stays open: conflicts can be retried with Replace below.
+      }
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t("common.error")));
     } finally {
@@ -1528,6 +1554,41 @@ export function InstallSkills() {
             </div>
             <p className="mb-3 text-[13px] text-muted">{t("install.gitPreview.description")}</p>
 
+            {/* Destination: User ~/.agents/skills or current Project */}
+            <div className="mb-3 flex items-center gap-2 text-[13px]">
+              <span className="text-muted">{t("install.gitPreview.destination")}</span>
+              <div className="app-segmented bg-background">
+                <button
+                  type="button"
+                  onClick={() => setGitScope("user")}
+                  disabled={gitConfirmLoading}
+                  className={cn(
+                    "app-segmented-button",
+                    gitScope === "user" && "app-segmented-button-active"
+                  )}
+                >
+                  {t("install.gitPreview.toUser")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGitScope("project")}
+                  disabled={gitConfirmLoading || !currentProject}
+                  title={currentProject ? currentProject.path : t("install.gitPreview.noProject")}
+                  className={cn(
+                    "app-segmented-button",
+                    gitScope === "project" && "app-segmented-button-active"
+                  )}
+                >
+                  {t("install.gitPreview.toProject")}
+                </button>
+              </div>
+            </div>
+            {gitScope === "project" && (
+              <p className="mb-3 truncate text-[12px] text-muted">
+                {currentProject ? `${currentProject.name} — ${currentProject.path}\\.agents\\skills` : t("install.gitPreview.noProject")}
+              </p>
+            )}
+
             {/* Select all / deselect all */}
             <div className="mb-2 flex gap-2">
               <button
@@ -1553,7 +1614,9 @@ export function InstallSkills() {
               <p className="py-6 text-center text-[13px] text-muted">{t("install.gitPreview.empty")}</p>
             ) : (
               <div className="max-h-64 space-y-2 overflow-y-auto scrollbar-hide pr-1">
-                {gitSelections.map((item, idx) => (
+                {gitSelections.map((item, idx) => {
+                  const outcome = gitOutcomes?.find((o) => o.rel_path === item.rel_path);
+                  return (
                   <div
                     key={item.rel_path}
                     className={cn(
@@ -1590,9 +1653,17 @@ export function InstallSkills() {
                       {item.description ? (
                         <p className="mt-1 truncate text-[12px] text-muted">{item.description}</p>
                       ) : null}
+                      {outcome && outcome.status !== "installed" ? (
+                        <p className="mt-1 text-[12px] text-amber-400">
+                          {outcome.status === "conflict"
+                            ? t("install.gitPreview.alreadyManaged")
+                            : outcome.error ?? t("common.error")}
+                        </p>
+                      ) : null}
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
 
@@ -1605,9 +1676,19 @@ export function InstallSkills() {
               >
                 {t("common.cancel")}
               </button>
+              {gitOutcomes?.some((o) => o.status === "conflict") ? (
+                <button
+                  type="button"
+                  onClick={() => void handleGitConfirm(true)}
+                  disabled={gitConfirmLoading}
+                  className="app-button-primary"
+                >
+                  {t("install.gitPreview.replaceConflicts")}
+                </button>
+              ) : null}
               <button
                 type="button"
-                onClick={handleGitConfirm}
+                onClick={() => void handleGitConfirm(false)}
                 disabled={gitConfirmLoading || gitSelections.every((s) => !s.selected)}
                 className="app-button-primary"
               >

@@ -538,7 +538,13 @@
       "deselectAll": "Deselect All",
       "namePlaceholder": "Skill name",
       "confirm": "Import Selected",
-      "empty": "No importable skills found"
+      "empty": "No importable skills found",
+      "destination": "Install to",
+      "toUser": "User .agents",
+      "toProject": "Project .agents",
+      "noProject": "Link a project workspace first",
+      "alreadyManaged": "Already managed — use Replace to overwrite",
+      "replaceConflicts": "Replace existing"
     },
     "scan": {
       "title": "Scan Local Skills",

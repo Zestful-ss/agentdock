@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Download, FolderInput, Pencil, RefreshCw, Trash2, X } from "lucide-react";
-import { useApp } from "../context/AppContext";
 import * as api from "../lib/tauri";
+import { useCurrentProject } from "../lib/useCurrentProject";
 import type {
   CanonicalScope,
   McpInventoryRow,
@@ -10,8 +10,6 @@ import type {
   SkillInventoryRow,
 } from "../lib/tauri";
 import { getErrorKind, getErrorMessage } from "../lib/error";
-
-const CURRENT_PROJECT_LS_KEY = "skills-manager.currentProjectId";
 
 function statusLabel(status: SkillInventoryRow["status"]): string {
   switch (status) {
@@ -39,7 +37,7 @@ function mcpStatusLabel(enabled: boolean | null): string {
 }
 
 export function Inventory() {
-  const { projects } = useApp();
+  const { projects, currentProject, selectProject } = useCurrentProject();
   const [panel, setPanel] = useState<"skills" | "mcp">("skills");
   const [skills, setSkills] = useState<SkillInventoryRow[]>([]);
   const [projectSkills, setProjectSkills] = useState<SkillInventoryRow[]>([]);
@@ -57,38 +55,6 @@ export function Inventory() {
   } | null>(null);
   const [migration, setMigration] = useState<MigrationEntry[] | null>(null);
   const [migrating, setMigrating] = useState(false);
-
-  // Current project: explicit identity, never "first row of the table".
-  const [currentProjectId, setCurrentProjectId] = useState<string | null>(() => {
-    try {
-      return localStorage.getItem(CURRENT_PROJECT_LS_KEY);
-    } catch {
-      return null;
-    }
-  });
-  const selectProject = useCallback((id: string | null) => {
-    setCurrentProjectId(id);
-    try {
-      if (id) localStorage.setItem(CURRENT_PROJECT_LS_KEY, id);
-      else localStorage.removeItem(CURRENT_PROJECT_LS_KEY);
-    } catch {
-      // localStorage may be unavailable; selection is still tracked in memory.
-    }
-  }, []);
-  const currentProject = useMemo(() => {
-    if (projects.length === 0) return null;
-    // Explicit identity only: a stale persisted id resolves to null (never to
-    // "whatever happens to be first"), except the single-project case which is
-    // adopted explicitly and re-persisted below.
-    return projects.find((p) => p.id === currentProjectId) ?? null;
-  }, [projects, currentProjectId]);
-
-  // Single linked project: adopt it explicitly instead of guessing.
-  useEffect(() => {
-    if (projects.length === 1 && currentProjectId !== projects[0].id) {
-      selectProject(projects[0].id);
-    }
-  }, [projects, currentProjectId, selectProject]);
 
   const refresh = useCallback(async () => {
     setLoading(true);

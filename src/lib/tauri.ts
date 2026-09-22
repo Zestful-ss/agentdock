@@ -285,11 +285,36 @@ export interface SkillInstallItem {
   name: string;
 }
 
+export type GitInstallScope = "user" | "project";
+
+/** Per-item result of a git install batch. */
+export interface GitInstallOutcome {
+  rel_path: string;
+  name: string;
+  status: "installed" | "conflict" | "failed";
+  dest_path: string | null;
+  error: string | null;
+}
+
 export const previewGitInstall = (repoUrl: string) =>
   invoke<GitPreviewResult>("preview_git_install", { repoUrl });
 
-export const confirmGitInstall = (repoUrl: string, tempDir: string, items: SkillInstallItem[]) =>
-  invoke<void>("confirm_git_install", { repoUrl, tempDir, items });
+export const confirmGitInstall = (
+  repoUrl: string,
+  tempDir: string,
+  items: SkillInstallItem[],
+  scope?: GitInstallScope | null,
+  projectId?: string | null,
+  replace?: boolean
+) =>
+  invoke<GitInstallOutcome[]>("confirm_git_install", {
+    repoUrl,
+    tempDir,
+    items,
+    scope: scope ?? null,
+    projectId: projectId ?? null,
+    replace: replace ?? null,
+  });
 
 export const cancelGitPreview = (tempDir: string) =>
   invoke<void>("cancel_git_preview", { tempDir });

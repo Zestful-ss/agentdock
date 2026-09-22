@@ -538,7 +538,13 @@
       "deselectAll": "取消全选",
       "namePlaceholder": "技能名称",
       "confirm": "导入选中项",
-      "empty": "未发现可导入的技能"
+      "empty": "未发现可导入的技能",
+      "destination": "安装到",
+      "toUser": "用户 .agents",
+      "toProject": "项目 .agents",
+      "noProject": "请先关联一个项目工作区",
+      "alreadyManaged": "已存在 —— 用替换覆盖",
+      "replaceConflicts": "替换已存在项"
     },
     "scan": {
       "title": "扫描本地 Skills 并导入",
