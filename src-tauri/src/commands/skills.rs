@@ -1117,6 +1117,10 @@ pub async fn preview_git_install(
 /// V1 never renames on collision: an existing name + `replace != true` yields
 /// a per-item `conflict` outcome (frontend offers Replace/Cancel) while the
 /// remaining items still install.
+///
+/// Temp lifecycle: the clone is cleaned up here **unless** a conflict retry
+/// may still need it (`temp_retained`). Every dialog exit path on the frontend
+/// (success-close, Cancel, X) cancels the temp explicitly, so nothing leaks.
 #[tauri::command]
 pub async fn confirm_git_install(
     repo_url: String,
@@ -1126,165 +1130,187 @@ pub async fn confirm_git_install(
     project_id: Option<String>,
     replace: Option<bool>,
     store: State<'_, Arc<SkillStore>>,
-) -> Result<Vec<GitInstallOutcome>, AppError> {
+) -> Result<GitConfirmResult, AppError> {
     let store = store.inner().clone();
     let proxy_url = store.proxy_url();
     tauri::async_runtime::spawn_blocking(move || {
         let temp_path = validate_clone_temp_path(&temp_dir)?;
-
-        let result: Result<Vec<GitInstallOutcome>, AppError> = (|| {
-            if items.is_empty() {
-                return Ok(Vec::new());
-            }
-            let scope_name = scope.as_deref().unwrap_or("user");
-            let replace = replace.unwrap_or(false);
-
-            let parsed = git_fetcher::parse_git_source_resolved(&repo_url, proxy_url.as_deref());
-            let skill_dir = resolve_skill_dir(&temp_path, parsed.subpath.as_deref(), None)?;
-            let all_dirs = collect_git_skill_dirs(&skill_dir);
-            let revision = git_fetcher::get_head_revision(&temp_path).map_err(AppError::git)?;
-
-            // Backend-resolved destination. Project scope is pure filesystem;
-            // user scope reconciles the SkillStore under the repo lock below.
-            enum Destination {
-                User(crate::core::canonical::ResolvedRoot),
-                Project(crate::core::canonical::ResolvedRoot),
-            }
-            let destination = match scope_name {
-                "project" => {
-                    let project_id = project_id.ok_or_else(|| {
-                        AppError::invalid_input("project_id is required for project installs")
-                    })?;
-                    let (_, resolved) =
-                        crate::core::canonical::resolve_project_root(&store, &project_id)?;
-                    Destination::Project(resolved)
-                }
-                "user" => {
-                    Destination::User(crate::core::canonical::resolve_user_root()?)
-                }
-                _ => {
-                    return Err(AppError::invalid_input(
-                        "scope must be 'user' or 'project'",
-                    ))
-                }
-            };
-            let root = match &destination {
-                Destination::User(root) | Destination::Project(root) => root,
-            };
-            let user_scope = matches!(destination, Destination::User(_));
-
-            let _lock = if user_scope {
-                Some(
-                    RepoLock::acquire_foreground("confirm git install")
-                        .map_err(AppError::db)?,
-                )
-            } else {
-                None
-            };
-
-            let mut outcomes = Vec::new();
-            for dir in &all_dirs {
-                let rel_key = skill_rel_key(&skill_dir, dir);
-                let item = match items.iter().find(|i| i.rel_path == rel_key) {
-                    Some(i) => i,
-                    None => continue,
-                };
-                let custom_name = item.name.trim();
-                let installed = (|| -> Result<PathBuf, AppError> {
-                    if custom_name.is_empty() {
-                        crate::core::canonical::install_skill_dir(dir, root, replace)
-                    } else {
-                        let clean =
-                            crate::core::canonical::sanitize_component(custom_name)?;
-                        crate::core::canonical::install_skill_dir_as(
-                            dir, root, &clean, replace,
-                        )
-                    }
-                })();
-                let dest = match installed {
-                    Ok(dest) => dest,
-                    Err(err)
-                        if matches!(
-                            err.kind,
-                            crate::core::error::ErrorKind::TargetConflict
-                        ) =>
-                    {
-                        outcomes.push(GitInstallOutcome {
-                            rel_path: rel_key,
-                            name: item.name.clone(),
-                            status: "conflict".to_string(),
-                            dest_path: None,
-                            error: Some(err.to_string()),
-                        });
-                        continue;
-                    }
-                    Err(err) => {
-                        outcomes.push(GitInstallOutcome {
-                            rel_path: rel_key,
-                            name: item.name.clone(),
-                            status: "failed".to_string(),
-                            dest_path: None,
-                            error: Some(err.to_string()),
-                        });
-                        continue;
-                    }
-                };
-
-                if user_scope {
-                    let name = dest
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_else(|| item.name.clone());
-                    let meta = skill_metadata::parse_skill_md(&dest);
-                    let hash = crate::core::content_hash::hash_directory(&dest)
-                        .map_err(AppError::io)?;
-                    let subpath = git_fetcher::relative_subpath(&temp_path, dir);
-                    let metadata = InstallSourceMetadata {
-                        source_type: "git".to_string(),
-                        source_ref: Some(repo_url.clone()),
-                        source_ref_resolved: Some(parsed.clone_url.clone()),
-                        source_subpath: subpath,
-                        source_branch: parsed.branch.clone(),
-                        source_revision: Some(revision.clone()),
-                        remote_revision: Some(revision.clone()),
-                        update_status: "up_to_date".to_string(),
-                    };
-                    store_installed_skill_unlocked(
-                        &store,
-                        &installer::InstallResult {
-                            name: name.clone(),
-                            description: meta.description,
-                            central_path: dest.clone(),
-                            content_hash: hash,
-                        },
-                        &metadata,
-                        None,
-                    )?;
-                    outcomes.push(GitInstallOutcome {
-                        rel_path: rel_key,
-                        name,
-                        status: "installed".to_string(),
-                        dest_path: Some(dest.display().to_string()),
-                        error: None,
-                    });
-                } else {
-                    outcomes.push(GitInstallOutcome {
-                        rel_path: rel_key,
-                        name: item.name.clone(),
-                        status: "installed".to_string(),
-                        dest_path: Some(dest.display().to_string()),
-                        error: None,
-                    });
-                }
-            }
-            Ok(outcomes)
-        })();
-
-        // Always clean up temp directory, regardless of success or failure.
-        git_fetcher::cleanup_temp(&temp_path);
-        result
+        let scope_name = scope.as_deref().unwrap_or("user");
+        let result = confirm_git_install_inner(
+            &store,
+            &repo_url,
+            &temp_path,
+            &items,
+            scope_name,
+            project_id.as_deref(),
+            replace.unwrap_or(false),
+            proxy_url.as_deref(),
+        );
+        let retain = git_confirm_should_retain_temp(
+            result
+                .as_ref()
+                .map(|outcomes| outcomes.as_slice())
+                .unwrap_or(&[]),
+        );
+        if !retain {
+            git_fetcher::cleanup_temp(&temp_path);
+        }
+        result.map(|outcomes| GitConfirmResult {
+            outcomes,
+            temp_retained: retain,
+        })
     })
     .await?
+}
+
+/// Inner install loop, split out for tests (the command adds temp validation
+/// and temp lifecycle around it).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn confirm_git_install_inner(
+    store: &SkillStore,
+    repo_url: &str,
+    temp_path: &Path,
+    items: &[SkillInstallItem],
+    scope: &str,
+    project_id: Option<&str>,
+    replace: bool,
+    proxy_url: Option<&str>,
+) -> Result<Vec<GitInstallOutcome>, AppError> {
+    if items.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let parsed = git_fetcher::parse_git_source_resolved(repo_url, proxy_url);
+    let skill_dir = resolve_skill_dir(temp_path, parsed.subpath.as_deref(), None)?;
+    let all_dirs = collect_git_skill_dirs(&skill_dir);
+    let revision = git_fetcher::get_head_revision(temp_path).map_err(AppError::git)?;
+
+    // Backend-resolved destination. Project scope is pure filesystem;
+    // user scope reconciles the SkillStore under the repo lock below.
+    enum Destination {
+        User(crate::core::canonical::ResolvedRoot),
+        Project(crate::core::canonical::ResolvedRoot),
+    }
+    let destination = match scope {
+        "project" => {
+            let project_id = project_id.ok_or_else(|| {
+                AppError::invalid_input("project_id is required for project installs")
+            })?;
+            let (_, resolved) =
+                crate::core::canonical::resolve_project_root(store, project_id)?;
+            Destination::Project(resolved)
+        }
+        "user" => Destination::User(crate::core::canonical::resolve_user_root()?),
+        _ => {
+            return Err(AppError::invalid_input(
+                "scope must be 'user' or 'project'",
+            ))
+        }
+    };
+    let root = match &destination {
+        Destination::User(root) | Destination::Project(root) => root,
+    };
+    let user_scope = matches!(destination, Destination::User(_));
+
+    let _lock = if user_scope {
+        Some(RepoLock::acquire_foreground("confirm git install").map_err(AppError::db)?)
+    } else {
+        None
+    };
+
+    let mut outcomes = Vec::new();
+    for dir in &all_dirs {
+        let rel_key = skill_rel_key(&skill_dir, dir);
+        let item = match items.iter().find(|i| i.rel_path == rel_key) {
+            Some(i) => i,
+            None => continue,
+        };
+        let custom_name = item.name.trim();
+        let installed = (|| -> Result<PathBuf, AppError> {
+            if custom_name.is_empty() {
+                crate::core::canonical::install_skill_dir(dir, root, replace)
+            } else {
+                let clean = crate::core::canonical::sanitize_component(custom_name)?;
+                crate::core::canonical::install_skill_dir_as(dir, root, &clean, replace)
+            }
+        })();
+        let dest = match installed {
+            Ok(dest) => dest,
+            Err(err)
+                if matches!(
+                    err.kind,
+                    crate::core::error::ErrorKind::TargetConflict
+                ) =>
+            {
+                outcomes.push(GitInstallOutcome {
+                    rel_path: rel_key,
+                    name: item.name.clone(),
+                    status: "conflict".to_string(),
+                    dest_path: None,
+                    error: Some(err.to_string()),
+                });
+                continue;
+            }
+            Err(err) => {
+                outcomes.push(GitInstallOutcome {
+                    rel_path: rel_key,
+                    name: item.name.clone(),
+                    status: "failed".to_string(),
+                    dest_path: None,
+                    error: Some(err.to_string()),
+                });
+                continue;
+            }
+        };
+
+        if user_scope {
+            let name = dest
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| item.name.clone());
+            let meta = skill_metadata::parse_skill_md(&dest);
+            let hash =
+                crate::core::content_hash::hash_directory(&dest).map_err(AppError::io)?;
+            let subpath = git_fetcher::relative_subpath(temp_path, dir);
+            let metadata = InstallSourceMetadata {
+                source_type: "git".to_string(),
+                source_ref: Some(repo_url.to_string()),
+                source_ref_resolved: Some(parsed.clone_url.clone()),
+                source_subpath: subpath,
+                source_branch: parsed.branch.clone(),
+                source_revision: Some(revision.clone()),
+                remote_revision: Some(revision.clone()),
+                update_status: "up_to_date".to_string(),
+            };
+            store_installed_skill_unlocked(
+                store,
+                &installer::InstallResult {
+                    name: name.clone(),
+                    description: meta.description,
+                    central_path: dest.clone(),
+                    content_hash: hash,
+                },
+                &metadata,
+                None,
+            )?;
+            outcomes.push(GitInstallOutcome {
+                rel_path: rel_key,
+                name,
+                status: "installed".to_string(),
+                dest_path: Some(dest.display().to_string()),
+                error: None,
+            });
+        } else {
+            outcomes.push(GitInstallOutcome {
+                rel_path: rel_key,
+                name: item.name.clone(),
+                status: "installed".to_string(),
+                dest_path: Some(dest.display().to_string()),
+                error: None,
+            });
+        }
+    }
+    Ok(outcomes)
 }
 
 /// Per-item result of a git install batch. `status` is one of
@@ -1296,6 +1322,21 @@ pub struct GitInstallOutcome {
     pub status: String,
     pub dest_path: Option<String>,
     pub error: Option<String>,
+}
+
+/// Result of a git install batch: per-item outcomes plus temp lifecycle.
+/// `temp_retained` is true while a conflict retry may still need the clone;
+/// the frontend cancels it explicitly on every dialog exit.
+#[derive(Debug, Clone, Serialize)]
+pub struct GitConfirmResult {
+    pub outcomes: Vec<GitInstallOutcome>,
+    pub temp_retained: bool,
+}
+
+/// Whether the clone must survive this batch: exactly while some item ended
+/// in `conflict` (the only outcome a retry can resolve).
+pub(crate) fn git_confirm_should_retain_temp(outcomes: &[GitInstallOutcome]) -> bool {
+    outcomes.iter().any(|o| o.status == "conflict")
 }
 
 /// Clean up temp directory from a cancelled preview session.
@@ -4221,6 +4262,165 @@ mod tests {
             fetch_remote_subpath_hash(&source_a, &head3, None).expect("hash of skills/a v2");
         assert_ne!(hash_a1, hash_a3, "changed subdirectory changes its hash");
     }
+
+    // ── confirm_git_install inner (P1 retry lifecycle) ──
+
+    struct SkillsOverrideGuard;
+    impl Drop for SkillsOverrideGuard {
+        fn drop(&mut self) {
+            central_repo::set_runtime_skills_dir_override(None);
+        }
+    }
+
+    fn git_cli(dir: &Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .status()
+            .expect("git must be runnable in tests");
+        assert!(status.success(), "git {args:?} failed in {}", dir.display());
+    }
+
+    /// Temp "clone" dir with two skills and a real git history, shaped like
+    /// what preview hands to confirm.
+    fn init_confirm_fixture(base: &Path) -> PathBuf {
+        let temp = base.join(format!(
+            "{}confirm-fixture",
+            git_fetcher::CLONE_TEMP_PREFIX
+        ));
+        for skill in ["ga", "gb"] {
+            let dir = temp.join("skills").join(skill);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(
+                dir.join("SKILL.md"),
+                format!("---\nname: git-{skill}\n---\n{skill} v1\n"),
+            )
+            .unwrap();
+        }
+        git_cli(&temp, &["init"]);
+        git_cli(&temp, &["config", "user.email", "test@example.test"]);
+        git_cli(&temp, &["config", "user.name", "test"]);
+        git_cli(&temp, &["config", "commit.gpgsign", "false"]);
+        git_cli(&temp, &["add", "-A"]);
+        git_cli(&temp, &["commit", "-m", "init"]);
+        temp
+    }
+
+    fn install_item(rel_path: &str, name: &str) -> SkillInstallItem {
+        SkillInstallItem {
+            rel_path: rel_path.to_string(),
+            name: name.to_string(),
+        }
+    }
+
+    /// installed + conflict → replace retries only the conflict, records are
+    /// never duplicated, and the retain rule keeps temp exactly while a
+    /// conflict retry may still need it.
+    #[test]
+    fn confirm_git_install_conflict_then_replace() {
+        let repo = test_repo();
+        let skills_tmp = tempdir().unwrap();
+        let _skills_guard = SkillsOverrideGuard;
+        central_repo::set_runtime_skills_dir_override(Some(skills_tmp.path().to_path_buf()));
+
+        let fixture_base = tempdir().unwrap();
+        let temp = init_confirm_fixture(fixture_base.path());
+        let url = temp.display().to_string();
+        let items = vec![
+            install_item("skills/ga", "git-ga"),
+            install_item("skills/gb", ""),
+        ];
+
+        // First pass installs both; nothing to retain.
+        let outcomes =
+            confirm_git_install_inner(&repo.store, &url, &temp, &items, "user", None, false, None)
+                .unwrap();
+        assert_eq!(outcomes.len(), 2);
+        assert!(outcomes.iter().all(|o| o.status == "installed"));
+        assert!(!git_confirm_should_retain_temp(&outcomes));
+        assert_eq!(repo.store.get_all_skills().unwrap().len(), 2);
+
+        // Same skill again without replace → conflict, temp retained.
+        let ga_only = vec![install_item("skills/ga", "git-ga")];
+        let outcomes =
+            confirm_git_install_inner(&repo.store, &url, &temp, &ga_only, "user", None, false, None)
+                .unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].status, "conflict");
+        assert!(git_confirm_should_retain_temp(&outcomes));
+
+        // Replace retries only the conflict: installed, still one record per
+        // skill, and the new content actually landed.
+        fs::write(
+            temp.join("skills/ga/SKILL.md"),
+            "---\nname: git-ga\n---\nga v2\n",
+        )
+        .unwrap();
+        let outcomes =
+            confirm_git_install_inner(&repo.store, &url, &temp, &ga_only, "user", None, true, None)
+                .unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].status, "installed");
+        assert!(!git_confirm_should_retain_temp(&outcomes));
+        assert_eq!(repo.store.get_all_skills().unwrap().len(), 2);
+        let installed = fs::read_to_string(skills_tmp.path().join("git-ga").join("SKILL.md"))
+            .unwrap();
+        assert!(installed.contains("ga v2"), "replace must land new content");
+    }
+
+    /// Project installs land in `<project>/.agents/skills` with no records.
+    #[test]
+    fn confirm_git_install_project_scope_is_filesystem_only() {
+        let repo = test_repo();
+        let proj_root = repo._tmp.path().join("proj");
+        fs::create_dir_all(&proj_root).unwrap();
+        repo.store
+            .insert_project(&crate::core::skill_store::ProjectRecord {
+                id: "p1".to_string(),
+                name: "proj".to_string(),
+                path: proj_root.display().to_string(),
+                workspace_type: "project".to_string(),
+                linked_agent_key: None,
+                linked_agent_name: None,
+                disabled_path: None,
+                sort_order: 0,
+                created_at: 0,
+                updated_at: 0,
+            })
+            .unwrap();
+
+        let fixture_base = tempdir().unwrap();
+        let temp = init_confirm_fixture(fixture_base.path());
+        let url = temp.display().to_string();
+        let items = vec![install_item("skills/ga", "")];
+
+        let outcomes = confirm_git_install_inner(
+            &repo.store,
+            &url,
+            &temp,
+            &items,
+            "project",
+            Some("p1"),
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].status, "installed");
+        assert!(proj_root
+            .join(".agents")
+            .join("skills")
+            .join("git-ga")
+            .join("SKILL.md")
+            .exists());
+        assert!(
+            repo.store.get_all_skills().unwrap().is_empty(),
+            "project installs keep no records"
+        );
+    }
+
+    /// Insert a `local` skill whose library copy is `central_body` and whose
 
     /// Insert a `local` skill whose library copy is `central_body` and whose
     /// original source path holds `source_body`, with the stored hash recorded

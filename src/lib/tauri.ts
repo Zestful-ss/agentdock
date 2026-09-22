@@ -296,6 +296,13 @@ export interface GitInstallOutcome {
   error: string | null;
 }
 
+/** Batch result: outcomes plus temp lifecycle for conflict retries. */
+export interface GitConfirmResult {
+  outcomes: GitInstallOutcome[];
+  /** True while a conflict retry may still need the clone. */
+  temp_retained: boolean;
+}
+
 export const previewGitInstall = (repoUrl: string) =>
   invoke<GitPreviewResult>("preview_git_install", { repoUrl });
 
@@ -307,7 +314,7 @@ export const confirmGitInstall = (
   projectId?: string | null,
   replace?: boolean
 ) =>
-  invoke<GitInstallOutcome[]>("confirm_git_install", {
+  invoke<GitConfirmResult>("confirm_git_install", {
     repoUrl,
     tempDir,
     items,

@@ -42,6 +42,16 @@ const MARKET_SEARCH_DEBOUNCE_MS = 450;
 const MARKET_SEARCH_CACHE_TTL_MS = 120_000;
 const MARKET_SEARCH_CACHE_MAX_ENTRIES = 150;
 
+/** Merge fresh outcomes into previous ones by rel_path (untouched rows keep theirs). */
+function mergeOutcomes(
+  prev: GitInstallOutcome[] | null,
+  fresh: GitInstallOutcome[]
+): GitInstallOutcome[] {
+  const merged = new Map((prev ?? []).map((o) => [o.rel_path, o]));
+  for (const outcome of fresh) merged.set(outcome.rel_path, outcome);
+  return [...merged.values()];
+}
+
 export function InstallSkills() {
   const { t } = useTranslation();
   const { refreshPresets, refreshManagedSkills, managedSkills, openSkillDetailById } = useApp();
@@ -467,6 +477,8 @@ export function InstallSkills() {
 
   const handleGitPreview = async () => {
     if (!gitUrl.trim()) return;
+    // A previous preview's temp must not leak when starting over.
+    cancelPreviewTemp();
     setGitLoading(true);
     const url = gitUrl.trim();
     setGitCancelKey(url);
@@ -514,20 +526,37 @@ export function InstallSkills() {
 
   const handleGitPreviewClose = () => {
     if (gitConfirmLoading) return;
+    closeGitDialog();
+  };
+
+  // The preview temp stays alive across conflict retries: the backend only
+  // cleans it when nothing conflicted, and every exit below cancels it.
+  const cancelPreviewTemp = useCallback(() => {
     if (gitPreview) {
       api.cancelGitPreview(gitPreview.temp_dir).catch(() => {});
     }
+  }, [gitPreview]);
+
+  const closeGitDialog = useCallback(() => {
+    cancelPreviewTemp();
     setGitPreview(null);
     setGitPreviewRepoUrl(null);
     setGitSelections([]);
     setGitOutcomes(null);
-  };
+  }, [cancelPreviewTemp]);
 
   const handleGitConfirm = async (replace = false) => {
     if (!gitPreview) return;
     const repoUrl = gitPreviewRepoUrl ?? gitUrl.trim();
     if (!repoUrl) return;
-    const selected = gitSelections.filter((s) => s.selected);
+    // A Replace retry submits only the conflicted items; already-installed
+    // rows must not be reinstalled with replace=true.
+    const candidates = gitSelections.filter((s) => s.selected);
+    const selected = replace && gitOutcomes
+      ? candidates.filter((s) =>
+          gitOutcomes.some((o) => o.rel_path === s.rel_path && o.status === "conflict")
+        )
+      : candidates;
     if (selected.length === 0) return;
     if (gitScope === "project" && !currentProject) {
       toast.error(t("install.gitPreview.noProject"));
@@ -535,7 +564,7 @@ export function InstallSkills() {
     }
     setGitConfirmLoading(true);
     try {
-      const outcomes = await api.confirmGitInstall(
+      const result = await api.confirmGitInstall(
         repoUrl,
         gitPreview.temp_dir,
         selected.map((s) => ({ rel_path: s.rel_path, name: s.name })),
@@ -543,24 +572,28 @@ export function InstallSkills() {
         currentProject?.id ?? null,
         replace
       );
-      setGitOutcomes(outcomes);
-      const installed = outcomes.filter((o) => o.status === "installed");
-      const conflicts = outcomes.filter((o) => o.status === "conflict");
-      const failed = outcomes.filter((o) => o.status === "failed");
+      // Merge by rel_path: rows this retry did not touch keep their outcome
+      // (a previous failure must not vanish from the dialog).
+      setGitOutcomes((prev) => {
+        const merged = new Map((prev ?? []).map((o) => [o.rel_path, o]));
+        for (const outcome of result.outcomes) merged.set(outcome.rel_path, outcome);
+        return [...merged.values()];
+      });
+      const merged = mergeOutcomes(gitOutcomes, result.outcomes);
+      const installed = merged.filter((o) => o.status === "installed");
+      const conflicts = merged.filter((o) => o.status === "conflict");
+      const failed = merged.filter((o) => o.status === "failed");
       await Promise.all([refreshPresets(), refreshManagedSkills()]);
       if (conflicts.length === 0 && failed.length === 0) {
         toast.success(t("install.toast.success", { name: installed.map((s) => s.name).join(", ") }));
         setGitUrl("");
-        setGitPreview(null);
-        setGitPreviewRepoUrl(null);
-        setGitSelections([]);
-        setGitOutcomes(null);
+        closeGitDialog();
       } else {
         const parts = [`${installed.length} installed`];
         if (conflicts.length > 0) parts.push(`${conflicts.length} already managed`);
         if (failed.length > 0) parts.push(`${failed.length} failed`);
         toast.warning(parts.join(", "));
-        // Dialog stays open: conflicts can be retried with Replace below.
+        // Dialog stays open on the live temp: conflicts retry with Replace.
       }
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, t("common.error")));

@@ -51,7 +51,13 @@ impl ResolvedRoot {
 }
 
 /// Resolve the user-level canonical root (`~/.agents/skills`).
+///
+/// Honors the skills-dir override when one is set (CLI `--skills-root`
+/// external checkouts, test isolation); otherwise the canonical location.
 pub fn resolve_user_root() -> Result<ResolvedRoot, AppError> {
+    if let Some(path) = super::central_repo::skills_dir_override() {
+        return ResolvedRoot::new(path);
+    }
     ResolvedRoot::new(paths::user_agents_skills_dir())
 }
 
