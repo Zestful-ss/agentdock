@@ -1118,8 +1118,8 @@ pub async fn preview_git_install(
 /// a per-item `conflict` outcome (frontend offers Replace/Cancel) while the
 /// remaining items still install.
 ///
-/// Temp lifecycle: the clone is cleaned up here **unless** a conflict retry
-/// may still need it (`temp_retained`). Every dialog exit path on the frontend
+/// Temp lifecycle: the clone is cleaned up here **unless** some item still
+/// needs a retry (`temp_retained`). Every dialog exit path on the frontend
 /// (success-close, Cancel, X) cancels the temp explicitly, so nothing leaks.
 #[tauri::command]
 pub async fn confirm_git_install(
@@ -1333,10 +1333,13 @@ pub struct GitConfirmResult {
     pub temp_retained: bool,
 }
 
-/// Whether the clone must survive this batch: exactly while some item ended
-/// in `conflict` (the only outcome a retry can resolve).
+/// Whether the clone must survive this batch: exactly while some item is not
+/// yet installed. `conflict` is retryable with Replace, `failed` with a plain
+/// retry; only an all-`installed` batch (or a hard error) releases the temp.
+/// The dialog stays open in both retry cases, so releasing it would hand the
+/// next confirm a deleted `temp_dir` — and resubmit already-installed rows.
 pub(crate) fn git_confirm_should_retain_temp(outcomes: &[GitInstallOutcome]) -> bool {
-    outcomes.iter().any(|o| o.status == "conflict")
+    outcomes.iter().any(|o| o.status != "installed")
 }
 
 /// Clean up temp directory from a cancelled preview session.
@@ -4371,6 +4374,57 @@ mod tests {
         let dest = outcomes[0].dest_path.clone().expect("installed has a path");
         let installed = fs::read_to_string(Path::new(&dest).join("SKILL.md")).unwrap();
         assert!(installed.contains("ga v2"), "replace must land new content");
+    }
+
+    /// installed + failed keeps the temp alive; retrying only the failed item
+    /// leaves the installed record (and content) untouched.
+    #[test]
+    fn confirm_git_install_failed_items_retain_temp() {
+        let repo = test_repo();
+        let skills_tmp = tempdir().unwrap();
+        let _skills_guard = SkillsOverrideGuard;
+        central_repo::set_runtime_skills_dir_override(Some(skills_tmp.path().to_path_buf()));
+
+        let fixture_base = tempdir().unwrap();
+        let temp = init_confirm_fixture(fixture_base.path());
+        let url = temp.display().to_string();
+        let (items, _scan_root) = discover_fixture_items(&temp, &url);
+        assert_eq!(items.len(), 2, "fixture must offer two skills");
+
+        // One good item, one whose name can never sanitize: installed + failed.
+        let mixed = vec![
+            items[0].clone(),
+            SkillInstallItem {
+                rel_path: items[1].rel_path.clone(),
+                name: "../evil".to_string(),
+            },
+        ];
+        let outcomes = confirm_git_install_inner(
+            &repo.store, &url, &temp, &mixed, "user", None, false, None,
+        )
+        .unwrap();
+        assert_eq!(outcomes.len(), 2);
+        assert!(outcomes.iter().any(|o| o.status == "installed"));
+        assert!(outcomes.iter().any(|o| o.status == "failed"));
+        assert!(
+            git_confirm_should_retain_temp(&outcomes),
+            "temp must survive while a retry is possible"
+        );
+        assert_eq!(repo.store.get_all_skills().unwrap().len(), 1);
+
+        // Retry submits only the failed item: still failed, installed record
+        // and content untouched.
+        let failed_only = vec![SkillInstallItem {
+            rel_path: items[1].rel_path.clone(),
+            name: "../evil".to_string(),
+        }];
+        let outcomes = confirm_git_install_inner(
+            &repo.store, &url, &temp, &failed_only, "user", None, false, None,
+        )
+        .unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].status, "failed");
+        assert_eq!(repo.store.get_all_skills().unwrap().len(), 1);
     }
 
     /// Project installs land in `<project>/.agents/skills` with no records.

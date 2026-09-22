@@ -549,14 +549,19 @@ export function InstallSkills() {
     if (!gitPreview) return;
     const repoUrl = gitPreviewRepoUrl ?? gitUrl.trim();
     if (!repoUrl) return;
-    // A Replace retry submits only the conflicted items; already-installed
-    // rows must not be reinstalled with replace=true.
+    // Retry semantics once outcomes exist:
+    // - Replace → conflicts only (installed rows must not be reinstalled).
+    // - Import Selected → selected rows except already-installed ones, so a
+    //   retry after a partial batch never resubmits successes or a deleted
+    //   temp's ghosts.
     const candidates = gitSelections.filter((s) => s.selected);
-    const selected = replace && gitOutcomes
-      ? candidates.filter((s) =>
-          gitOutcomes.some((o) => o.rel_path === s.rel_path && o.status === "conflict")
-        )
-      : candidates;
+    const outcomeOf = (relPath: string) =>
+      gitOutcomes?.find((o) => o.rel_path === relPath)?.status;
+    const selected = !gitOutcomes
+      ? candidates
+      : replace
+        ? candidates.filter((s) => outcomeOf(s.rel_path) === "conflict")
+        : candidates.filter((s) => outcomeOf(s.rel_path) !== "installed");
     if (selected.length === 0) return;
     if (gitScope === "project" && !currentProject) {
       toast.error(t("install.gitPreview.noProject"));
