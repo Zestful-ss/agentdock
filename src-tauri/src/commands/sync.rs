@@ -285,6 +285,8 @@ mod tests {
         dir
     }
 
+    // Unused since the V1 deploy block; kept for the remaining scenario tests.
+    #[allow(dead_code)]
     fn configure_single_custom_tool(store: &SkillStore, target_base: &std::path::Path) {
         let custom_tools = vec![CustomToolDef {
             key: "test_agent".to_string(),
@@ -442,33 +444,25 @@ mod tests {
 
     #[test]
     fn sync_skill_to_tool_keeps_duplicate_skill_names_separate() {
+        // V1: harness deploys are blocked by policy. The internal entry point
+        // refuses and writes nothing; duplicate-name separation now lives in
+        // the canonical writer (same name → target_conflict, never merged).
         let tmp = tempdir().unwrap();
         let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
-        let source_base = tmp.path().join("central");
         let target_base = tmp.path().join("agent-skills");
-        fs::create_dir_all(&source_base).unwrap();
         fs::create_dir_all(&target_base).unwrap();
-        configure_single_custom_tool(&store, &target_base);
 
-        let first_dir = write_skill_dir(&source_base, "skill123", "first");
-        let second_dir = write_skill_dir(&source_base, "skill123-2", "second");
-        store
-            .insert_skill(&sample_skill("first", "skill123", &first_dir))
-            .unwrap();
-        store
-            .insert_skill(&sample_skill("second", "skill123", &second_dir))
-            .unwrap();
-
-        sync_skill_to_tool_internal(&store, "first", "test_agent").unwrap();
-        sync_skill_to_tool_internal(&store, "second", "test_agent").unwrap();
-
-        assert_eq!(
-            fs::read_to_string(target_base.join("skill123/unique.txt")).unwrap(),
-            "first"
+        let err = sync_skill_to_tool_internal(&store, "first", "test_agent").unwrap_err();
+        assert!(
+            matches!(
+                err.kind,
+                crate::core::error::ErrorKind::Policy
+            ),
+            "expected a V1 policy refusal, got {err:?}"
         );
-        assert_eq!(
-            fs::read_to_string(target_base.join("skill123-2/unique.txt")).unwrap(),
-            "second"
+        assert!(
+            fs::read_dir(&target_base).unwrap().next().is_none(),
+            "blocked deploy must not write anything"
         );
     }
 }
