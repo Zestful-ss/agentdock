@@ -71,6 +71,21 @@ pub fn resolve_project_root(
     Ok((record.path, ResolvedRoot::new(root)?))
 }
 
+/// Project root for **read** paths (inventory/discovery): returns the lexical
+/// root without creating anything. Viewing a project must never create
+/// `<repo>/.agents/skills` as a side effect.
+pub fn resolve_project_root_for_read(
+    store: &SkillStore,
+    project_id: &str,
+) -> Result<(String, PathBuf), AppError> {
+    let record = store
+        .get_project_by_id(project_id)
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found("Project not found"))?;
+    let root = paths::project_agents_skills_dir(Path::new(&record.path));
+    Ok((record.path, root))
+}
+
 /// Legacy (pre-V1) skill library: `~/.skills-manager/skills` (or the configured
 /// base). App metadata (DB, cache, logs) still lives under `base_dir()`; only
 /// the skill *library* moved to the canonical location.
@@ -174,10 +189,6 @@ fn already_managed_conflict(dest: &Path, skill_name: &str) -> AppError {
     )
 }
 
-fn copy_skill_tree(source: &Path, dest: &Path) -> Result<(), AppError> {
-    super::installer::copy_skill_dir(source, dest).map_err(AppError::io)
-}
-
 /// Install a skill directory into a canonical root.
 ///
 /// - `Missing` destination → install.
@@ -227,28 +238,46 @@ pub fn install_skill_dir_as(
     sync_engine::ensure_dst_not_inside_src(source, &dest)
         .map_err(|e| AppError::invalid_input(e.to_string()))?;
 
-    if dest.exists() {
-        // A non-directory (or link) squatting on the name can never be a
-        // managed skill; refuse rather than follow or delete it blindly.
+    if dest.exists() || is_link(&dest) {
+        if !replace {
+            // Conflict check first so a cancel never deletes anything.
+            if is_link(&dest) {
+                return Err(AppError::invalid_input(POLICY_NO_SYMLINK));
+            }
+            if !dest.is_dir() {
+                return Err(AppError::invalid_input(format!(
+                    "Cannot install \"{clean}\": a file with the same name exists"
+                )));
+            }
+            validate_existing_skill(resolved, &dest)?;
+            return Err(already_managed_conflict(&dest, &clean));
+        }
+        // Replace path: the staged build below validates the source fully
+        // before `swap_dir_staged` touches the existing destination, so a
+        // failed copy can never lose the managed skill. Symlinks/junctions
+        // squatting on the name are still refused outright.
         if is_link(&dest) {
             return Err(AppError::invalid_input(POLICY_NO_SYMLINK));
         }
-        if !dest.is_dir() {
+        if dest.is_dir() {
+            validate_existing_skill(resolved, &dest)?;
+        } else {
             return Err(AppError::invalid_input(format!(
                 "Cannot install \"{clean}\": a file with the same name exists"
             )));
         }
-        if !replace {
-            validate_existing_skill(resolved, &dest)?;
-            return Err(already_managed_conflict(&dest, &clean));
-        }
-        validate_existing_skill(resolved, &dest)?;
-        fs::remove_dir_all(&dest).map_err(AppError::io)?;
     }
 
-    copy_skill_tree(source, &dest)?;
+    // Fail-safe mechanics: build + hash in a staged sibling, then move into
+    // place (fresh rename, or backup + rollback swap for replace).
+    let hash = super::staged::install_via_stage(source, &dest, replace)?;
     // Post-condition: what we just wrote resolves inside the root.
     validate_existing_skill(resolved, &dest)?;
+    debug_assert_eq!(
+        hash,
+        content_hash::hash_directory(&dest).map_err(AppError::io)?,
+        "staged install must land byte-identical content"
+    );
     Ok(dest)
 }
 
@@ -387,6 +416,8 @@ pub enum MigrationOutcome {
     Conflict,
     /// No DB record pointed at the legacy path; copied (or already present).
     Adopted,
+    /// This item failed; every other item was still attempted.
+    Failed,
 }
 
 /// One row of the migration report.
@@ -396,13 +427,36 @@ pub struct MigrationEntry {
     pub legacy_path: String,
     pub canonical_path: String,
     pub outcome: MigrationOutcome,
+    /// Hash of the canonical copy for adopted/migrated/updated rows.
+    pub content_hash: Option<String>,
+    /// Set only for `Failed` rows.
+    pub error: Option<String>,
+}
+
+fn failed_entry(name: String, legacy_path: String, canonical_path: String, err: AppError) -> MigrationEntry {
+    MigrationEntry {
+        name,
+        legacy_path,
+        canonical_path,
+        outcome: MigrationOutcome::Failed,
+        content_hash: None,
+        error: Some(err.to_string()),
+    }
 }
 
 /// Migrate the pre-V1 library (`~/.skills-manager/skills`) into the canonical
 /// user root (`~/.agents/skills`).
 ///
+/// Per-item isolated: one skill failing (IO, hash, DB) is reported as a
+/// `Failed` row and never stops the remaining items. Copies land via a staged
+/// sibling and are hash-verified, so a failed copy leaves no half-written
+/// skill behind (and a later run sees `missing`, not `conflict`).
 /// Conflict-safe: an existing canonical copy with different content is never
 /// overwritten. The legacy directory is never deleted here (P2 cleanup).
+///
+/// DB writes (relink adopted/migrated rows) go through the caller-supplied
+/// `SkillStore` but are **not** finalized here: the command layer wraps this
+/// in the repo lock and persists `sync_metadata` once at the end.
 pub fn migrate_legacy_library(store: &SkillStore) -> Result<Vec<MigrationEntry>, AppError> {
     let legacy_root = legacy_skills_root();
     if !legacy_root.exists() {
@@ -416,81 +470,308 @@ pub fn migrate_legacy_library(store: &SkillStore) -> Result<Vec<MigrationEntry>,
     let records = store.get_all_skills().map_err(AppError::db)?;
 
     let mut report = Vec::new();
-    let entries = fs::read_dir(&legacy_root).map_err(AppError::io)?;
-    for entry in entries.flatten() {
-        let legacy_dir = entry.path();
+    let read_dir = fs::read_dir(&legacy_root).map_err(AppError::io)?;
+    for dir_entry in read_dir {
+        let legacy_dir = match dir_entry {
+            Ok(entry) => entry.path(),
+            Err(err) => {
+                report.push(MigrationEntry {
+                    name: "<unreadable-entry>".to_string(),
+                    legacy_path: legacy_root.display().to_string(),
+                    canonical_path: String::new(),
+                    outcome: MigrationOutcome::Failed,
+                    content_hash: None,
+                    error: Some(format!("Cannot list legacy library entry: {err}")),
+                });
+                continue;
+            }
+        };
         if !legacy_dir.is_dir() || is_link(&legacy_dir) {
             continue;
         }
         if !skill_metadata::is_valid_skill_dir(&legacy_dir) {
             continue;
         }
-        let name = sanitize_component(&skill_metadata::infer_skill_name(&legacy_dir))?;
-        let legacy_hash = content_hash::hash_directory(&legacy_dir).map_err(AppError::io)?;
-        let dest = resolved.root.join(&name);
+        report.push(migrate_one_legacy_skill(
+            store,
+            &resolved,
+            &records,
+            &legacy_dir,
+        ));
+    }
+    Ok(report)
+}
 
-        let matching: Vec<_> = records
-            .iter()
-            .filter(|r| paths::identity_key(Path::new(&r.central_path)) == paths::identity_key(&legacy_dir))
-            .collect();
-
-        if dest.exists() {
-            validate_existing_skill(&resolved, &dest)?;
-            let dest_hash = content_hash::hash_directory(&dest).map_err(AppError::io)?;
-            if dest_hash == legacy_hash {
-                for record in &matching {
-                    store
-                        .update_skill_central_path(&record.id, &dest.display().to_string(), Some(&dest_hash))
-                        .map_err(AppError::db)?;
-                }
-                report.push(MigrationEntry {
-                    name,
-                    legacy_path: legacy_dir.display().to_string(),
-                    canonical_path: dest.display().to_string(),
-                    outcome: if matching.is_empty() {
-                        MigrationOutcome::Adopted
-                    } else {
-                        MigrationOutcome::UpdatedDbOnly
-                    },
-                });
-            } else {
-                report.push(MigrationEntry {
-                    name,
-                    legacy_path: legacy_dir.display().to_string(),
-                    canonical_path: dest.display().to_string(),
-                    outcome: MigrationOutcome::Conflict,
-                });
-            }
-            continue;
+fn migrate_one_legacy_skill(
+    store: &SkillStore,
+    resolved: &ResolvedRoot,
+    records: &[super::skill_store::SkillRecord],
+    legacy_dir: &Path,
+) -> MigrationEntry {
+    let failed = |name: String, canonical_path: String, err: AppError| {
+        failed_entry(name, legacy_dir.display().to_string(), canonical_path, err)
+    };
+    let name = match sanitize_component(&skill_metadata::infer_skill_name(legacy_dir)) {
+        Ok(name) => name,
+        Err(err) => {
+            return failed(
+                legacy_dir
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "<unknown>".to_string()),
+                String::new(),
+                err,
+            )
         }
+    };
+    let dest = resolved.root.join(&name);
+    let legacy_hash = match content_hash::hash_directory(legacy_dir).map_err(AppError::io) {
+        Ok(hash) => hash,
+        Err(err) => return failed(name, dest.display().to_string(), err),
+    };
 
-        validate_new_destination(&resolved, &dest)?;
-        copy_skill_tree(&legacy_dir, &dest)?;
-        let copied_hash = content_hash::hash_directory(&dest).map_err(AppError::io)?;
-        if copied_hash != legacy_hash {
-            // Copy verification failed; remove the half-written copy.
-            let _ = fs::remove_dir_all(&dest);
-            return Err(AppError::internal(format!(
-                "Migration copy verification failed for {name}"
-            )));
-        }
+    let matching: Vec<_> = records
+        .iter()
+        .filter(|r| {
+            paths::identity_key(Path::new(&r.central_path)) == paths::identity_key(legacy_dir)
+        })
+        .collect();
+    let relink = |hash: &str| -> Result<(), AppError> {
         for record in &matching {
             store
-                .update_skill_central_path(&record.id, &dest.display().to_string(), Some(&copied_hash))
+                .update_skill_central_path(
+                    &record.id,
+                    &dest.display().to_string(),
+                    Some(hash),
+                )
                 .map_err(AppError::db)?;
         }
-        report.push(MigrationEntry {
+        Ok(())
+    };
+
+    if dest.exists() || is_link(&dest) {
+        if is_link(&dest) {
+            return failed(
+                name,
+                dest.display().to_string(),
+                AppError::invalid_input(POLICY_NO_SYMLINK),
+            );
+        }
+        if let Err(err) = validate_existing_skill(resolved, &dest) {
+            return failed(name, dest.display().to_string(), err);
+        }
+        let dest_hash = match content_hash::hash_directory(&dest).map_err(AppError::io) {
+            Ok(hash) => hash,
+            Err(err) => return failed(name, dest.display().to_string(), err),
+        };
+        if dest_hash == legacy_hash {
+            if let Err(err) = relink(&dest_hash) {
+                return failed(name, dest.display().to_string(), err);
+            }
+            return MigrationEntry {
+                name,
+                legacy_path: legacy_dir.display().to_string(),
+                canonical_path: dest.display().to_string(),
+                outcome: if matching.is_empty() {
+                    MigrationOutcome::Adopted
+                } else {
+                    MigrationOutcome::UpdatedDbOnly
+                },
+                content_hash: Some(dest_hash),
+                error: None,
+            };
+        }
+        return MigrationEntry {
             name,
             legacy_path: legacy_dir.display().to_string(),
             canonical_path: dest.display().to_string(),
-            outcome: if matching.is_empty() {
-                MigrationOutcome::Adopted
-            } else {
-                MigrationOutcome::Migrated
-            },
-        });
+            outcome: MigrationOutcome::Conflict,
+            content_hash: Some(dest_hash),
+            error: None,
+        };
     }
-    Ok(report)
+
+    if let Err(err) = validate_new_destination(resolved, &dest) {
+        return failed(name, dest.display().to_string(), err);
+    }
+    // Staged, hash-verified copy: `dest` appears only when complete.
+    let staged_hash = match super::staged::install_via_stage(legacy_dir, &dest, false) {
+        Ok(hash) => hash,
+        Err(err) => return failed(name, dest.display().to_string(), err),
+    };
+    if staged_hash != legacy_hash {
+        let _ = super::staged::remove_path_if_exists(&dest);
+        return failed(
+            name,
+            dest.display().to_string(),
+            AppError::internal(format!("Migration copy verification failed for {name}")),
+        );
+    }
+    if let Err(err) = relink(&staged_hash) {
+        return failed(name, dest.display().to_string(), err);
+    }
+    MigrationEntry {
+        name,
+        legacy_path: legacy_dir.display().to_string(),
+        canonical_path: dest.display().to_string(),
+        outcome: if matching.is_empty() {
+            MigrationOutcome::Adopted
+        } else {
+            MigrationOutcome::Migrated
+        },
+        content_hash: Some(staged_hash),
+        error: None,
+    }
+}
+
+// ── SkillStore reconcile (user scope) ──
+//
+// The filesystem is authoritative for *what* is managed; the `SkillStore` is
+// the index MySkills / update-checks read. Every user-scope canonical write
+// must reconcile both under the repo lock, or the two drift apart:
+//
+// ```text
+// RepoLock → filesystem mutation → SkillStore reconcile → sync_metadata
+// ```
+//
+// Project scope intentionally has no records: it is pure filesystem.
+
+/// Registration data for a user-scope canonical skill.
+pub struct UserSkillRegistration {
+    pub name: String,
+    pub description: Option<String>,
+    pub central_path: PathBuf,
+    pub content_hash: String,
+    /// e.g. `"adopted"`, `"migrated"`.
+    pub source_type: String,
+    /// Where it came from (harness path, legacy path); shown in MySkills.
+    pub source_ref: Option<String>,
+}
+
+/// Insert (or refresh) the `SkillStore` record for a canonical user skill.
+///
+/// Must be called with the repo lock held. Finalizes with `sync_metadata`.
+/// Records whose `central_path` already points here are refreshed in place
+/// (hash + source), never duplicated.
+pub fn register_user_skill(
+    store: &SkillStore,
+    reg: &UserSkillRegistration,
+) -> Result<String, AppError> {
+    let central = reg.central_path.display().to_string();
+    if let Some(existing) = store
+        .get_skill_by_central_path(&central)
+        .map_err(AppError::db)?
+    {
+        // Refresh the existing record in place (hash + adopted source);
+        // never duplicate it.
+        store
+            .update_skill_after_reinstall(
+                &existing.id,
+                &reg.name,
+                reg.description.as_deref(),
+                &reg.source_type,
+                reg.source_ref.as_deref(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(&reg.content_hash),
+                "local_only",
+            )
+            .map_err(AppError::db)?;
+        super::sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
+        return Ok(existing.id);
+    }
+    // Fall back to identity match: an older record may spell the same
+    // directory differently (case, separators) on this machine.
+    let identity = super::paths::identity_key(&reg.central_path);
+    let same_dir = store
+        .get_all_skills()
+        .map_err(AppError::db)?
+        .into_iter()
+        .find(|r| super::paths::identity_key(Path::new(&r.central_path)) == identity);
+    if let Some(record) = same_dir {
+        store
+            .update_skill_central_path(&record.id, &central, Some(&reg.content_hash))
+            .map_err(AppError::db)?;
+        super::sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
+        return Ok(record.id);
+    }
+
+    let now = chrono::Utc::now().timestamp_millis();
+    let id = uuid::Uuid::new_v4().to_string();
+    store
+        .insert_skill(&super::skill_store::SkillRecord {
+            id: id.clone(),
+            name: reg.name.clone(),
+            description: reg.description.clone(),
+            source_type: reg.source_type.clone(),
+            source_ref: reg.source_ref.clone(),
+            source_ref_resolved: None,
+            source_subpath: None,
+            source_branch: None,
+            source_revision: None,
+            remote_revision: None,
+            central_path: central,
+            content_hash: Some(reg.content_hash.clone()),
+            enabled: true,
+            created_at: now,
+            updated_at: now,
+            status: "ok".to_string(),
+            update_status: "local_only".to_string(),
+            last_checked_at: Some(now),
+            last_check_error: None,
+        })
+        .map_err(AppError::db)?;
+    store.log_audit(
+        super::audit_log::AuditDraft::new("install")
+            .detail(reg.source_type.clone())
+            .skill(id.clone(), reg.name.clone())
+            .ok(),
+    );
+    super::sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
+    Ok(id)
+}
+
+/// Remove `SkillStore` records (and their deploy-target rows) for a canonical
+/// directory that was just deleted. Returns the removed record count.
+///
+/// Must be called with the repo lock held. Touches the database only: harness
+/// directories are observe-only in V1 and are never modified here, even when
+/// stale `skill_targets` rows point at them.
+pub fn remove_user_skill_records(
+    store: &SkillStore,
+    canonical_dir: &Path,
+) -> Result<usize, AppError> {
+    let identity = super::paths::identity_key(canonical_dir);
+    let matching: Vec<_> = store
+        .get_all_skills()
+        .map_err(AppError::db)?
+        .into_iter()
+        .filter(|r| super::paths::identity_key(Path::new(&r.central_path)) == identity)
+        .collect();
+    if matching.is_empty() {
+        return Ok(0);
+    }
+    for record in &matching {
+        for target in store
+            .get_targets_for_skill(&record.id)
+            .map_err(AppError::db)?
+        {
+            store
+                .delete_target(&record.id, &target.tool)
+                .map_err(AppError::db)?;
+        }
+        store.delete_skill(&record.id).map_err(AppError::db)?;
+        store.log_audit(
+            super::audit_log::AuditDraft::new("remove")
+                .skill(record.id.clone(), record.name.clone())
+                .ok(),
+        );
+    }
+    super::sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
+    Ok(matching.len())
 }
 
 #[cfg(test)]
@@ -624,5 +905,99 @@ mod tests {
 
         // Unknown ids never resolve to a writable root.
         assert!(resolve_project_root(&store, "nope").is_err());
+    }
+
+    struct IsolatedBase {
+        _guard: std::sync::MutexGuard<'static, ()>,
+        _tmp: tempfile::TempDir,
+    }
+
+    impl Drop for IsolatedBase {
+        fn drop(&mut self) {
+            super::super::central_repo::set_test_base_dir_override(None);
+        }
+    }
+
+    /// Redirect metadata writes into a temp dir so reconcile tests never touch
+    /// the real `~/.skills-manager`.
+    fn isolated_base() -> IsolatedBase {
+        let guard = super::super::central_repo::test_base_dir_lock();
+        let tmp = tempdir().unwrap();
+        super::super::central_repo::set_test_base_dir_override(Some(
+            tmp.path().join("base"),
+        ));
+        IsolatedBase { _guard: guard, _tmp: tmp }
+    }
+
+    #[test]
+    fn register_then_remove_reconciles_records() {
+        use super::super::skill_store::SkillStore;
+
+        let _iso = isolated_base();
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        let dir = make_source(tmp.path(), "reconciled", "body");
+        let hash = super::super::content_hash::hash_directory(&dir).unwrap();
+
+        let id = register_user_skill(
+            &store,
+            &UserSkillRegistration {
+                name: "reconciled".to_string(),
+                description: Some("desc".to_string()),
+                central_path: dir.clone(),
+                content_hash: hash.clone(),
+                source_type: "adopted".to_string(),
+                source_ref: Some("/harness/other".to_string()),
+            },
+        )
+        .unwrap();
+        // Re-registering the same directory refreshes in place, never duplicates.
+        let id2 = register_user_skill(
+            &store,
+            &UserSkillRegistration {
+                name: "reconciled".to_string(),
+                description: Some("desc".to_string()),
+                central_path: dir.clone(),
+                content_hash: hash.clone(),
+                source_type: "adopted".to_string(),
+                source_ref: Some("/harness/other".to_string()),
+            },
+        )
+        .unwrap();
+        assert_eq!(id, id2);
+        assert_eq!(store.get_all_skills().unwrap().len(), 1);
+
+        let removed = remove_user_skill_records(&store, &dir).unwrap();
+        assert_eq!(removed, 1);
+        assert!(store.get_all_skills().unwrap().is_empty());
+        // Nothing left to remove is a no-op, not an error.
+        assert_eq!(remove_user_skill_records(&store, &dir).unwrap(), 0);
+    }
+
+    #[test]
+    fn migration_item_failure_does_not_stop_others() {
+        use super::super::skill_store::SkillStore;
+
+        let tmp = tempdir().unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        let legacy = tmp.path().join("legacy");
+        let (_t, resolved) = test_root();
+        let good = make_source(&legacy, "good", "body");
+        let records = store.get_all_skills().unwrap();
+
+        let ok_entry = migrate_one_legacy_skill(&store, &resolved, &records, &good);
+        assert_eq!(ok_entry.outcome, MigrationOutcome::Adopted);
+        assert!(ok_entry.content_hash.is_some());
+
+        // A legacy dir whose destination is blocked produces Failed, and the
+        // previously migrated skill is untouched by that failure.
+        let blocker = resolved.root.join("blocked");
+        fs::write(&blocker, "squatting file").unwrap();
+        let legacy_blocked = make_source(&legacy, "blocked", "body");
+        let failed_entry =
+            migrate_one_legacy_skill(&store, &resolved, &records, &legacy_blocked);
+        assert_eq!(failed_entry.outcome, MigrationOutcome::Failed);
+        assert!(failed_entry.error.is_some());
+        assert!(resolved.root.join("good").join("SKILL.md").exists());
     }
 }

@@ -66,12 +66,7 @@ export function Inventory() {
       return null;
     }
   });
-  const currentProject = useMemo(() => {
-    if (projects.length === 0) return null;
-    return projects.find((p) => p.id === currentProjectId) ?? projects[0] ?? null;
-  }, [projects, currentProjectId]);
-
-  const selectProject = (id: string | null) => {
+  const selectProject = useCallback((id: string | null) => {
     setCurrentProjectId(id);
     try {
       if (id) localStorage.setItem(CURRENT_PROJECT_LS_KEY, id);
@@ -79,7 +74,21 @@ export function Inventory() {
     } catch {
       // localStorage may be unavailable; selection is still tracked in memory.
     }
-  };
+  }, []);
+  const currentProject = useMemo(() => {
+    if (projects.length === 0) return null;
+    // Explicit identity only: a stale persisted id resolves to null (never to
+    // "whatever happens to be first"), except the single-project case which is
+    // adopted explicitly and re-persisted below.
+    return projects.find((p) => p.id === currentProjectId) ?? null;
+  }, [projects, currentProjectId]);
+
+  // Single linked project: adopt it explicitly instead of guessing.
+  useEffect(() => {
+    if (projects.length === 1 && currentProjectId !== projects[0].id) {
+      selectProject(projects[0].id);
+    }
+  }, [projects, currentProjectId, selectProject]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -226,10 +235,13 @@ export function Inventory() {
       const report = await api.runLegacyMigration();
       setMigration(report);
       const conflicts = report.filter((r) => r.outcome === "conflict");
+      const failed = report.filter((r) => r.outcome === "failed");
       if (report.length === 0) {
         toast.info("Nothing to migrate");
-      } else if (conflicts.length > 0) {
-        toast.warning(`Migrated ${report.length - conflicts.length}, ${conflicts.length} conflict(s) left untouched`);
+      } else if (conflicts.length > 0 || failed.length > 0) {
+        toast.warning(
+          `Migrated ${report.length - conflicts.length - failed.length}, ${conflicts.length} conflict(s), ${failed.length} failed`
+        );
       } else {
         toast.success(`Migrated ${report.length} skill(s)`);
       }
@@ -303,9 +315,10 @@ export function Inventory() {
             ) : (
               <ul className="space-y-0.5">
                 {migration.map((m) => (
-                  <li key={m.canonical_path}>
+                  <li key={m.canonical_path || m.legacy_path}>
                     {m.name}: {m.outcome}
                     {m.outcome === "conflict" ? " (left untouched — resolve manually)" : ""}
+                    {m.outcome === "failed" && m.error ? ` (failed: ${m.error})` : ""}
                   </li>
                 ))}
               </ul>

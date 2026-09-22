@@ -903,7 +903,10 @@ export interface MigrationEntry {
   name: string;
   legacy_path: string;
   canonical_path: string;
-  outcome: "migrated" | "updated_db_only" | "conflict" | "adopted";
+  outcome: "migrated" | "updated_db_only" | "conflict" | "adopted" | "failed";
+  content_hash: string | null;
+  /** Set only for failed rows. */
+  error: string | null;
 }
 
 export const getSkillInventory = () =>

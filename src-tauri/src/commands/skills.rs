@@ -2840,38 +2840,11 @@ pub fn resolve_skillssh_install_target(
 }
 
 pub fn staged_path_for(central_path: &str) -> PathBuf {
-    let path = PathBuf::from(central_path);
-    let file_name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .unwrap_or_else(|| "skill".to_string());
-    path.with_file_name(format!(".{file_name}.staged-{}", uuid::Uuid::new_v4()))
+    crate::core::staged::staged_sibling_for(Path::new(central_path))
 }
 
 pub fn swap_skill_directory(staged_path: &Path, current_path: &Path) -> Result<(), AppError> {
-    let backup_path = current_path.with_file_name(format!(
-        ".{}.backup-{}",
-        current_path
-            .file_name()
-            .map(|name| name.to_string_lossy().to_string())
-            .unwrap_or_else(|| "skill".to_string()),
-        uuid::Uuid::new_v4()
-    ));
-
-    if current_path.exists() {
-        std::fs::rename(current_path, &backup_path)?;
-    }
-
-    if let Err(err) = std::fs::rename(staged_path, current_path) {
-        if backup_path.exists() {
-            let _ = std::fs::rename(&backup_path, current_path);
-        }
-        let _ = remove_path_if_exists(staged_path);
-        return Err(err.into());
-    }
-
-    remove_path_if_exists(&backup_path)?;
-    Ok(())
+    crate::core::staged::swap_dir_staged(staged_path, current_path)
 }
 
 pub fn resync_copy_targets(store: &SkillStore, skill_id: &str) -> Result<(), AppError> {
@@ -3127,12 +3100,7 @@ pub async fn batch_import_folder(
 }
 
 fn remove_path_if_exists(path: &Path) -> Result<(), AppError> {
-    if path.is_dir() {
-        std::fs::remove_dir_all(path)?;
-    } else if path.exists() {
-        std::fs::remove_file(path)?;
-    }
-    Ok(())
+    crate::core::staged::remove_path_if_exists(path)
 }
 
 #[cfg(test)]
