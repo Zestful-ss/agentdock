@@ -241,6 +241,16 @@ pub fn set_runtime_skills_dir_override(path: Option<PathBuf>) {
         .unwrap() = path;
 }
 
+/// Test/CLI-visible skills-dir override, if one is active. The CLI uses this
+/// for `--skills-root` external checkouts; tests use it for isolation.
+pub(crate) fn skills_dir_override() -> Option<PathBuf> {
+    SKILLS_DIR_OVERRIDE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap()
+        .clone()
+}
+
 #[cfg(test)]
 pub(crate) fn set_test_base_dir_override(path: Option<PathBuf>) {
     set_runtime_base_dir_override(path);

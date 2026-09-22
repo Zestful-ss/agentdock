@@ -304,7 +304,7 @@ pub struct GitPreviewResult {
     pub skills: Vec<GitSkillPreview>,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct SkillInstallItem {
     pub rel_path: String,
     pub name: String,
@@ -1111,65 +1111,235 @@ pub async fn preview_git_install(
 }
 
 /// Install selected skills from a previously cloned temp directory.
+///
+/// `scope` is `"user"` (default) or `"project"`; project installs additionally
+/// require `project_id` and keep no `SkillStore` records (filesystem only).
+/// V1 never renames on collision: an existing name + `replace != true` yields
+/// a per-item `conflict` outcome (frontend offers Replace/Cancel) while the
+/// remaining items still install.
+///
+/// Temp lifecycle: the clone is cleaned up here **unless** some item still
+/// needs a retry (`temp_retained`). Every dialog exit path on the frontend
+/// (success-close, Cancel, X) cancels the temp explicitly, so nothing leaks.
 #[tauri::command]
 pub async fn confirm_git_install(
     repo_url: String,
     temp_dir: String,
     items: Vec<SkillInstallItem>,
+    scope: Option<String>,
+    project_id: Option<String>,
+    replace: Option<bool>,
     store: State<'_, Arc<SkillStore>>,
-) -> Result<(), AppError> {
+) -> Result<GitConfirmResult, AppError> {
     let store = store.inner().clone();
     let proxy_url = store.proxy_url();
     tauri::async_runtime::spawn_blocking(move || {
         let temp_path = validate_clone_temp_path(&temp_dir)?;
-
-        let result: Result<(), AppError> = (|| {
-            if items.is_empty() {
-                return Ok(());
-            }
-
-            let parsed = git_fetcher::parse_git_source_resolved(&repo_url, proxy_url.as_deref());
-            let skill_dir = resolve_skill_dir(&temp_path, parsed.subpath.as_deref(), None)?;
-            let all_dirs = collect_git_skill_dirs(&skill_dir);
-            let revision = git_fetcher::get_head_revision(&temp_path).map_err(AppError::git)?;
-            let _lock =
-                RepoLock::acquire_foreground("confirm git install").map_err(AppError::db)?;
-
-            for dir in &all_dirs {
-                let rel_key = skill_rel_key(&skill_dir, dir);
-                let item = match items.iter().find(|i| i.rel_path == rel_key) {
-                    Some(i) => i,
-                    None => continue,
-                };
-                let custom_name = item.name.trim();
-                let install_name = if custom_name.is_empty() {
-                    None
-                } else {
-                    Some(custom_name)
-                };
-                let result =
-                    installer::install_from_git_dir(dir, install_name).map_err(AppError::io)?;
-                let subpath = git_fetcher::relative_subpath(&temp_path, dir);
-                let metadata = InstallSourceMetadata {
-                    source_type: "git".to_string(),
-                    source_ref: Some(repo_url.clone()),
-                    source_ref_resolved: Some(parsed.clone_url.clone()),
-                    source_subpath: subpath,
-                    source_branch: parsed.branch.clone(),
-                    source_revision: Some(revision.clone()),
-                    remote_revision: Some(revision.clone()),
-                    update_status: "up_to_date".to_string(),
-                };
-                store_installed_skill_unlocked(&store, &result, &metadata, None)?;
-            }
-            Ok(())
-        })();
-
-        // Always clean up temp directory, regardless of success or failure.
-        git_fetcher::cleanup_temp(&temp_path);
-        result
+        let scope_name = scope.as_deref().unwrap_or("user");
+        let result = confirm_git_install_inner(
+            &store,
+            &repo_url,
+            &temp_path,
+            &items,
+            scope_name,
+            project_id.as_deref(),
+            replace.unwrap_or(false),
+            proxy_url.as_deref(),
+        );
+        let retain = git_confirm_should_retain_temp(
+            result
+                .as_ref()
+                .map(|outcomes| outcomes.as_slice())
+                .unwrap_or(&[]),
+        );
+        if !retain {
+            git_fetcher::cleanup_temp(&temp_path);
+        }
+        result.map(|outcomes| GitConfirmResult {
+            outcomes,
+            temp_retained: retain,
+        })
     })
     .await?
+}
+
+/// Inner install loop, split out for tests (the command adds temp validation
+/// and temp lifecycle around it).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn confirm_git_install_inner(
+    store: &SkillStore,
+    repo_url: &str,
+    temp_path: &Path,
+    items: &[SkillInstallItem],
+    scope: &str,
+    project_id: Option<&str>,
+    replace: bool,
+    proxy_url: Option<&str>,
+) -> Result<Vec<GitInstallOutcome>, AppError> {
+    if items.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let parsed = git_fetcher::parse_git_source_resolved(repo_url, proxy_url);
+    let skill_dir = resolve_skill_dir(temp_path, parsed.subpath.as_deref(), None)?;
+    let all_dirs = collect_git_skill_dirs(&skill_dir);
+    let revision = git_fetcher::get_head_revision(temp_path).map_err(AppError::git)?;
+
+    // Backend-resolved destination. Project scope is pure filesystem;
+    // user scope reconciles the SkillStore under the repo lock below.
+    enum Destination {
+        User(crate::core::canonical::ResolvedRoot),
+        Project(crate::core::canonical::ResolvedRoot),
+    }
+    let destination = match scope {
+        "project" => {
+            let project_id = project_id.ok_or_else(|| {
+                AppError::invalid_input("project_id is required for project installs")
+            })?;
+            let (_, resolved) =
+                crate::core::canonical::resolve_project_root(store, project_id)?;
+            Destination::Project(resolved)
+        }
+        "user" => Destination::User(crate::core::canonical::resolve_user_root()?),
+        _ => {
+            return Err(AppError::invalid_input(
+                "scope must be 'user' or 'project'",
+            ))
+        }
+    };
+    let root = match &destination {
+        Destination::User(root) | Destination::Project(root) => root,
+    };
+    let user_scope = matches!(destination, Destination::User(_));
+
+    let _lock = if user_scope {
+        Some(RepoLock::acquire_foreground("confirm git install").map_err(AppError::db)?)
+    } else {
+        None
+    };
+
+    let mut outcomes = Vec::new();
+    for dir in &all_dirs {
+        let rel_key = skill_rel_key(&skill_dir, dir);
+        let item = match items.iter().find(|i| i.rel_path == rel_key) {
+            Some(i) => i,
+            None => continue,
+        };
+        let custom_name = item.name.trim();
+        let installed = (|| -> Result<PathBuf, AppError> {
+            if custom_name.is_empty() {
+                crate::core::canonical::install_skill_dir(dir, root, replace)
+            } else {
+                let clean = crate::core::canonical::sanitize_component(custom_name)?;
+                crate::core::canonical::install_skill_dir_as(dir, root, &clean, replace)
+            }
+        })();
+        let dest = match installed {
+            Ok(dest) => dest,
+            Err(err)
+                if matches!(
+                    err.kind,
+                    crate::core::error::ErrorKind::TargetConflict
+                ) =>
+            {
+                outcomes.push(GitInstallOutcome {
+                    rel_path: rel_key,
+                    name: item.name.clone(),
+                    status: "conflict".to_string(),
+                    dest_path: None,
+                    error: Some(err.to_string()),
+                });
+                continue;
+            }
+            Err(err) => {
+                outcomes.push(GitInstallOutcome {
+                    rel_path: rel_key,
+                    name: item.name.clone(),
+                    status: "failed".to_string(),
+                    dest_path: None,
+                    error: Some(err.to_string()),
+                });
+                continue;
+            }
+        };
+
+        if user_scope {
+            let name = dest
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| item.name.clone());
+            let meta = skill_metadata::parse_skill_md(&dest);
+            let hash =
+                crate::core::content_hash::hash_directory(&dest).map_err(AppError::io)?;
+            let subpath = git_fetcher::relative_subpath(temp_path, dir);
+            let metadata = InstallSourceMetadata {
+                source_type: "git".to_string(),
+                source_ref: Some(repo_url.to_string()),
+                source_ref_resolved: Some(parsed.clone_url.clone()),
+                source_subpath: subpath,
+                source_branch: parsed.branch.clone(),
+                source_revision: Some(revision.clone()),
+                remote_revision: Some(revision.clone()),
+                update_status: "up_to_date".to_string(),
+            };
+            store_installed_skill_unlocked(
+                store,
+                &installer::InstallResult {
+                    name: name.clone(),
+                    description: meta.description,
+                    central_path: dest.clone(),
+                    content_hash: hash,
+                },
+                &metadata,
+                None,
+            )?;
+            outcomes.push(GitInstallOutcome {
+                rel_path: rel_key,
+                name,
+                status: "installed".to_string(),
+                dest_path: Some(dest.display().to_string()),
+                error: None,
+            });
+        } else {
+            outcomes.push(GitInstallOutcome {
+                rel_path: rel_key,
+                name: item.name.clone(),
+                status: "installed".to_string(),
+                dest_path: Some(dest.display().to_string()),
+                error: None,
+            });
+        }
+    }
+    Ok(outcomes)
+}
+
+/// Per-item result of a git install batch. `status` is one of
+/// `"installed" | "conflict" | "failed"`.
+#[derive(Debug, Clone, Serialize)]
+pub struct GitInstallOutcome {
+    pub rel_path: String,
+    pub name: String,
+    pub status: String,
+    pub dest_path: Option<String>,
+    pub error: Option<String>,
+}
+
+/// Result of a git install batch: per-item outcomes plus temp lifecycle.
+/// `temp_retained` is true while a conflict retry may still need the clone;
+/// the frontend cancels it explicitly on every dialog exit.
+#[derive(Debug, Clone, Serialize)]
+pub struct GitConfirmResult {
+    pub outcomes: Vec<GitInstallOutcome>,
+    pub temp_retained: bool,
+}
+
+/// Whether the clone must survive this batch: exactly while some item is not
+/// yet installed. `conflict` is retryable with Replace, `failed` with a plain
+/// retry; only an all-`installed` batch (or a hard error) releases the temp.
+/// The dialog stays open in both retry cases, so releasing it would hand the
+/// next confirm a deleted `temp_dir` — and resubmit already-installed rows.
+pub(crate) fn git_confirm_should_retain_temp(outcomes: &[GitInstallOutcome]) -> bool {
+    outcomes.iter().any(|o| o.status != "installed")
 }
 
 /// Clean up temp directory from a cancelled preview session.
@@ -1250,6 +1420,69 @@ pub async fn check_all_skill_updates(
             resolve_remotes_concurrent(remotes.into_iter().collect(), proxy_url.clone())
         };
 
+        // ── Phase A2: subdirectory hashes for stale monorepo skills ──
+        // A head that moved only tells us the *repo* changed. For skills with
+        // a recorded subdirectory + content hash, resolve that directory at
+        // the new head (one scoped fetch per distinct repo/subpath) so Phase B
+        // can tell "this skill changed" from "some other directory changed".
+        // Still fully off the lock; failures stay absent → whole-repo signal.
+        let mut subpath_groups: HashMap<
+            (String, Option<String>, Option<String>, Option<String>),
+            Vec<String>,
+        > = HashMap::new();
+        for skill in &skills {
+            if !matches!(skill.source_type.as_str(), "git" | "skillssh") {
+                continue;
+            }
+            let Ok(source) = git_source_from_skill(skill) else {
+                continue;
+            };
+            if source.subpath.is_none() && source.locator_skill_id.is_none() {
+                continue;
+            }
+            if skill.content_hash.is_none() {
+                continue;
+            }
+            let head = remote_revisions
+                .get(&RemoteKey::from(source.clone()))
+                .and_then(|r| r.as_ref().ok());
+            let Some(head) = head else { continue };
+            if Some(head.as_str()) == skill.source_revision.as_deref() {
+                continue;
+            }
+            subpath_groups
+                .entry((
+                    source.clone_url.clone(),
+                    source.branch.clone(),
+                    source.subpath.clone(),
+                    source.locator_skill_id.clone(),
+                ))
+                .or_default()
+                .push(skill.id.clone());
+        }
+        let mut subpath_hashes: HashMap<String, Option<String>> = HashMap::new();
+        for ((clone_url, branch, subpath, locator), skill_ids) in &subpath_groups {
+            let source = GitSkillSource {
+                clone_url: clone_url.clone(),
+                branch: branch.clone(),
+                subpath: subpath.clone(),
+                locator_skill_id: locator.clone(),
+            };
+            // Resolve the head once per group; every member shares it.
+            let head = remote_revisions
+                .get(&RemoteKey {
+                    clone_url: clone_url.clone(),
+                    branch: branch.clone(),
+                })
+                .and_then(|r| r.as_ref().ok());
+            let hash = head.and_then(|head| {
+                fetch_remote_subpath_hash(&source, head, proxy_url.as_deref())
+            });
+            for skill_id in skill_ids {
+                subpath_hashes.insert(skill_id.clone(), hash.clone());
+            }
+        }
+
         // ── Phase B: apply the resolved revisions + local-source checks ──
         // Phase A already did every network read, so this loop only computes and
         // writes each skill's status columns. Re-take the central-repo lock per
@@ -1265,11 +1498,20 @@ pub async fn check_all_skill_updates(
         for skill in &skills {
             let prefetched = if matches!(skill.source_type.as_str(), "git" | "skillssh") {
                 git_source_from_skill(skill).ok().and_then(|source| {
-                    let key = RemoteKey::from(source);
+                    let key = RemoteKey::from(source.clone());
                     remote_revisions
                         .get(&key)
                         .cloned()
-                        .map(|result| PrefetchedRemote { key, result })
+                        .map(|result| PrefetchedRemote {
+                            key,
+                            result,
+                            subpath_hash: subpath_hashes
+                                .get(&skill.id)
+                                .cloned()
+                                .flatten(),
+                            subpath: source.subpath,
+                            locator_skill_id: source.locator_skill_id,
+                        })
                 })
             } else {
                 None
@@ -1340,6 +1582,46 @@ impl RemoteKey {
 pub struct PrefetchedRemote {
     key: RemoteKey,
     result: Result<String, String>,
+    /// Hash of this skill's subdirectory at the prefetched head revision.
+    /// `None` means "not determined" (no subpath, no stored hash, or the scoped
+    /// fetch failed) — callers fall back to the whole-repo revision signal.
+    subpath_hash: Option<String>,
+    /// Subpath/locator the hash was resolved for. The apply side re-derives
+    /// the source from the freshly read record and drops a hash whose target
+    /// moved since the prefetch (same race the revision tag guards).
+    subpath: Option<String>,
+    locator_skill_id: Option<String>,
+}
+
+/// Fetch the hash of one skill's subdirectory at a remote revision, off the
+/// central-repo lock. Returns `None` on any failure so callers keep the
+/// conservative whole-repo signal instead of inventing an answer.
+fn fetch_remote_subpath_hash(
+    source: &GitSkillSource,
+    remote_revision: &str,
+    proxy_url: Option<&str>,
+) -> Option<String> {
+    let temp = git_fetcher::clone_repo_ref_scoped(
+        &source.clone_url,
+        source.branch.as_deref(),
+        source.subpath.as_deref(),
+        None,
+        proxy_url,
+        None,
+    )
+    .ok()?;
+    let hash = (|| {
+        git_fetcher::checkout_revision(&temp, remote_revision).ok()?;
+        let dir = resolve_skill_dir(
+            &temp,
+            source.subpath.as_deref(),
+            source.locator_skill_id.as_deref(),
+        )
+        .ok()?;
+        crate::core::content_hash::hash_directory(&dir).ok()
+    })();
+    git_fetcher::cleanup_temp(&temp);
+    hash
 }
 
 /// Resolve one skill's remote revision *before* the caller takes the
@@ -1367,7 +1649,27 @@ pub fn prefetch_skill_remote(
     let result =
         git_fetcher::resolve_remote_revision(&key.clone_url, key.branch.as_deref(), proxy_url)
             .map_err(|err| err.to_string());
-    Some(PrefetchedRemote { key, result })
+    // When the repo moved, resolve what *this skill's subdirectory* looks like
+    // at the new head: a monorepo commit elsewhere must not flag every skill
+    // it contains. Failures stay `None` → whole-repo signal (conservative).
+    let source = git_source_from_skill(&skill).ok()?;
+    let subpath_hash = match &result {
+        Ok(head)
+            if Some(head.as_str()) != skill.source_revision.as_deref()
+                && skill.content_hash.is_some()
+                && (source.subpath.is_some() || source.locator_skill_id.is_some()) =>
+        {
+            fetch_remote_subpath_hash(&source, head, proxy_url)
+        }
+        _ => None,
+    };
+    Some(PrefetchedRemote {
+        key,
+        result,
+        subpath_hash,
+        subpath: source.subpath,
+        locator_skill_id: source.locator_skill_id,
+    })
 }
 
 /// Upper bound on concurrent `ls-remote` queries during a batch check. Collapses
@@ -2481,9 +2783,8 @@ pub fn check_skill_update_internal_with_remote(
             // central-repo lock, and a network call under that lock is the
             // 20s "busy" failure the off-lock split exists to remove (#315).
             // The next round picks the skill up.
-            let Some(remote_result) = prefetched
+            let Some(prefetched) = prefetched
                 .filter(|prefetched| prefetched.key.matches(&git_source))
-                .map(|prefetched| prefetched.result)
             else {
                 log::debug!(
                     "check update: no usable prefetched remote for {}, skipping this round",
@@ -2491,18 +2792,51 @@ pub fn check_skill_update_internal_with_remote(
                 );
                 return managed_skill_by_id(store, skill_id);
             };
+            let remote_result = prefetched.result;
+            // The subpath hash is only meaningful for the exact subdirectory
+            // it was resolved for; a repointed source drops it.
+            let subpath_hash = match (
+                prefetched.subpath.as_deref(),
+                prefetched.locator_skill_id.as_deref(),
+            ) {
+                (a, b)
+                    if a == git_source.subpath.as_deref()
+                        && b == git_source.locator_skill_id.as_deref() =>
+                {
+                    prefetched.subpath_hash
+                }
+                _ => None,
+            };
             match remote_result {
                 Ok(remote_revision) => {
-                    let update_status = match skill.source_revision.as_deref() {
-                        Some(current) if current == remote_revision => "up_to_date",
-                        Some(_) => "update_available",
-                        None => "unknown",
-                    };
+                    let status = classify_git_check_status(
+                        skill.source_revision.as_deref(),
+                        &remote_revision,
+                        skill.content_hash.as_deref(),
+                        subpath_hash.as_deref(),
+                    );
+                    // Silent refresh: the repo moved but this skill's
+                    // subdirectory did not. Advance the recorded revision so
+                    // the next check is a cheap head-compare instead of
+                    // another scoped fetch.
+                    if status == "up_to_date"
+                        && skill.source_revision.as_deref() != Some(remote_revision.as_str())
+                    {
+                        store
+                            .update_skill_source_metadata(
+                                &skill.id,
+                                Some(&git_source.clone_url),
+                                git_source.subpath.as_deref(),
+                                git_source.branch.as_deref(),
+                                Some(&remote_revision),
+                            )
+                            .map_err(AppError::db)?;
+                    }
                     store
                         .update_skill_check_state(
                             &skill.id,
                             Some(&remote_revision),
-                            update_status,
+                            status,
                             None,
                         )
                         .map_err(AppError::db)?;
@@ -2550,6 +2884,29 @@ pub fn check_skill_update_internal_with_remote(
     }
 
     managed_skill_by_id(store, skill_id)
+}
+
+/// Classify a git skill against a freshly resolved remote head.
+///
+/// The whole-repo revision is the cheap signal; the subdirectory hash is the
+/// precise one. A monorepo commit that touches only other directories moves
+/// the head without changing this skill, so an equal subpath hash means
+/// `up_to_date` even when the revisions differ. Any uncertainty (no stored
+/// revision/hash, no remote hash) keeps the historical whole-repo signal.
+fn classify_git_check_status(
+    stored_revision: Option<&str>,
+    remote_revision: &str,
+    stored_hash: Option<&str>,
+    remote_subpath_hash: Option<&str>,
+) -> &'static str {
+    match stored_revision {
+        Some(current) if current == remote_revision => "up_to_date",
+        Some(_) => match (stored_hash, remote_subpath_hash) {
+            (Some(a), Some(b)) if a == b => "up_to_date",
+            _ => "update_available",
+        },
+        None => "unknown",
+    }
 }
 
 /// Classify a `local`/`import` skill against its freshly hashed source.
@@ -3653,6 +4010,24 @@ mod tests {
         Some(PrefetchedRemote {
             key: remote(url, None),
             result: Ok(revision.to_string()),
+            subpath_hash: None,
+            subpath: None,
+            locator_skill_id: None,
+        })
+    }
+
+    fn prefetch_with_subpath(
+        url: &str,
+        revision: &str,
+        subpath: Option<&str>,
+        subpath_hash: Option<&str>,
+    ) -> Option<PrefetchedRemote> {
+        Some(PrefetchedRemote {
+            key: remote(url, None),
+            result: Ok(revision.to_string()),
+            subpath_hash: subpath_hash.map(str::to_string),
+            subpath: subpath.map(str::to_string),
+            locator_skill_id: None,
         })
     }
 
@@ -3703,6 +4078,409 @@ mod tests {
         );
         assert_eq!(stored.last_checked_at, None, "the check did not complete");
     }
+
+    // ── Subpath-hash check (P1.5): classifier unit tests ──
+
+    #[test]
+    fn git_check_status_prefers_subpath_hash() {
+        // Same revision: up to date without any hash.
+        assert_eq!(
+            classify_git_check_status(Some("r1"), "r1", Some("h"), Some("other")),
+            "up_to_date"
+        );
+        // Repo moved but this subdirectory did not: still up to date.
+        assert_eq!(
+            classify_git_check_status(Some("r1"), "r2", Some("h"), Some("h")),
+            "up_to_date"
+        );
+        // Subdirectory changed: update available.
+        assert_eq!(
+            classify_git_check_status(Some("r1"), "r2", Some("h"), Some("changed")),
+            "update_available"
+        );
+        // No remote hash: conservative whole-repo signal.
+        assert_eq!(
+            classify_git_check_status(Some("r1"), "r2", Some("h"), None),
+            "update_available"
+        );
+        // No stored hash: cannot compare subdirectories.
+        assert_eq!(
+            classify_git_check_status(Some("r1"), "r2", None, Some("h")),
+            "update_available"
+        );
+        // Never recorded a revision: unknown, not available.
+        assert_eq!(
+            classify_git_check_status(None, "r2", Some("h"), Some("h")),
+            "unknown"
+        );
+    }
+
+    /// A monorepo head that moved without touching this skill's subdirectory
+    /// marks it silently up to date AND advances the recorded revision, so the
+    /// next check is a cheap head-compare instead of another scoped fetch.
+    #[test]
+    fn unchanged_subpath_silently_advances_revision() {
+        let repo = test_repo();
+        insert_git_skill(&repo.store, "skill-1", "https://example.test/a.git");
+        {
+            let skill = repo.store.get_skill_by_id("skill-1").unwrap().unwrap();
+            repo.store
+                .update_skill_source_metadata(
+                    &skill.id,
+                    Some("https://example.test/a.git"),
+                    Some("skills/a"),
+                    None,
+                    Some("old-rev"),
+                )
+                .unwrap();
+            // Pretend the install recorded this subdirectory's hash.
+            repo.store
+                .update_skill_central_path(&skill.id, &skill.central_path, Some("hash-a"))
+                .unwrap();
+        }
+
+        let dto = check_skill_update_internal_with_remote(
+            &repo.store,
+            "skill-1",
+            true,
+            prefetch_with_subpath(
+                "https://example.test/a.git",
+                "new-rev",
+                Some("skills/a"),
+                Some("hash-a"),
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(dto.update_status, "up_to_date");
+        let stored = repo.store.get_skill_by_id("skill-1").unwrap().unwrap();
+        assert_eq!(stored.source_revision.as_deref(), Some("new-rev"));
+        assert_eq!(stored.remote_revision.as_deref(), Some("new-rev"));
+    }
+
+    /// A hash resolved for a *different* subdirectory must not clear the
+    /// update: the skill repointed between prefetch and apply.
+    #[test]
+    fn subpath_hash_for_another_directory_is_ignored() {
+        let repo = test_repo();
+        insert_git_skill(&repo.store, "skill-1", "https://example.test/a.git");
+        {
+            let skill = repo.store.get_skill_by_id("skill-1").unwrap().unwrap();
+            repo.store
+                .update_skill_source_metadata(
+                    &skill.id,
+                    Some("https://example.test/a.git"),
+                    Some("skills/b"),
+                    None,
+                    Some("old-rev"),
+                )
+                .unwrap();
+            repo.store
+                .update_skill_central_path(&skill.id, &skill.central_path, Some("hash-b"))
+                .unwrap();
+        }
+
+        let dto = check_skill_update_internal_with_remote(
+            &repo.store,
+            "skill-1",
+            true,
+            prefetch_with_subpath(
+                "https://example.test/a.git",
+                "new-rev",
+                Some("skills/a"),
+                Some("hash-b"),
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(dto.update_status, "update_available");
+    }
+
+    fn git_cli(dir: &Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .status()
+            .expect("git must be runnable in tests");
+        assert!(status.success(), "git {args:?} failed in {}", dir.display());
+    }
+
+    /// Two skills in one local repo; commits touching only `skills/b` leave
+    /// `skills/a`'s remote hash unchanged, while touching `skills/a` changes
+    /// it. This is the end-to-end property the update check relies on.
+    fn init_two_skill_repo(base: &Path) -> PathBuf {
+        let repo = base.join("fixture-repo");
+        for skill in ["a", "b"] {
+            let dir = repo.join("skills").join(skill);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(
+                dir.join("SKILL.md"),
+                format!("---\nname: {skill}\n---\n{skill} v1\n"),
+            )
+            .unwrap();
+        }
+        git_cli(&repo, &["init"]);
+        git_cli(&repo, &["config", "user.email", "test@example.test"]);
+        git_cli(&repo, &["config", "user.name", "test"]);
+        git_cli(&repo, &["config", "commit.gpgsign", "false"]);
+        git_cli(&repo, &["add", "-A"]);
+        git_cli(&repo, &["commit", "-m", "init"]);
+        repo
+    }
+
+    #[test]
+    fn remote_subpath_hash_tracks_only_its_directory() {
+        let _repo_guard = test_repo();
+        let tmp = tempdir().unwrap();
+        let repo = init_two_skill_repo(tmp.path());
+        let url = repo.display().to_string();
+        let source_a = GitSkillSource {
+            clone_url: url.clone(),
+            branch: None,
+            subpath: Some("skills/a".to_string()),
+            locator_skill_id: None,
+        };
+
+        let head1 = git_fetcher::resolve_remote_revision(&url, None, None).unwrap();
+        let hash_a1 =
+            fetch_remote_subpath_hash(&source_a, &head1, None).expect("hash of skills/a");
+
+        // Unrelated directory moves the head but not this skill's hash.
+        fs::write(repo.join("skills/b/SKILL.md"), "---\nname: b\n---\nb v2\n").unwrap();
+        git_cli(&repo, &["add", "-A"]);
+        git_cli(&repo, &["commit", "-m", "bump b"]);
+        let head2 = git_fetcher::resolve_remote_revision(&url, None, None).unwrap();
+        assert_ne!(head1, head2, "the repo head must have moved");
+        let hash_a2 =
+            fetch_remote_subpath_hash(&source_a, &head2, None).expect("hash of skills/a again");
+        assert_eq!(hash_a1, hash_a2, "untouched subdirectory keeps its hash");
+
+        // Touching the skill itself changes the hash.
+        fs::write(repo.join("skills/a/SKILL.md"), "---\nname: a\n---\na v2\n").unwrap();
+        git_cli(&repo, &["add", "-A"]);
+        git_cli(&repo, &["commit", "-m", "bump a"]);
+        let head3 = git_fetcher::resolve_remote_revision(&url, None, None).unwrap();
+        let hash_a3 =
+            fetch_remote_subpath_hash(&source_a, &head3, None).expect("hash of skills/a v2");
+        assert_ne!(hash_a1, hash_a3, "changed subdirectory changes its hash");
+    }
+
+    // ── confirm_git_install inner (P1 retry lifecycle) ──
+
+    struct SkillsOverrideGuard;
+    impl Drop for SkillsOverrideGuard {
+        fn drop(&mut self) {
+            central_repo::set_runtime_skills_dir_override(None);
+        }
+    }
+
+    /// Temp "clone" dir with two skills and a real git history, shaped like
+    /// what preview hands to confirm.
+    fn init_confirm_fixture(base: &Path) -> PathBuf {
+        let temp = base.join(format!(
+            "{}confirm-fixture",
+            git_fetcher::CLONE_TEMP_PREFIX
+        ));
+        for skill in ["ga", "gb"] {
+            let dir = temp.join("skills").join(skill);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(
+                dir.join("SKILL.md"),
+                format!("---\nname: git-{skill}\n---\n{skill} v1\n"),
+            )
+            .unwrap();
+        }
+        git_cli(&temp, &["init"]);
+        git_cli(&temp, &["config", "user.email", "test@example.test"]);
+        git_cli(&temp, &["config", "user.name", "test"]);
+        git_cli(&temp, &["config", "commit.gpgsign", "false"]);
+        git_cli(&temp, &["add", "-A"]);
+        git_cli(&temp, &["commit", "-m", "init"]);
+        temp
+    }
+
+    fn install_item(rel_path: &str, name: &str) -> SkillInstallItem {
+        SkillInstallItem {
+            rel_path: rel_path.to_string(),
+            name: name.to_string(),
+        }
+    }
+
+    /// Build install items exactly like the frontend does from a preview:
+    /// resolve the scan root, collect skill dirs, key them relative to it.
+    fn discover_fixture_items(temp: &Path, url: &str) -> (Vec<SkillInstallItem>, PathBuf) {
+        let parsed = git_fetcher::parse_git_source_resolved(url, None);
+        let scan_root =
+            resolve_skill_dir(temp, parsed.subpath.as_deref(), None).expect("scan root");
+        let items = collect_git_skill_dirs(&scan_root)
+            .iter()
+            .map(|dir| install_item(&skill_rel_key(&scan_root, dir), ""))
+            .collect();
+        (items, scan_root)
+    }
+
+    /// installed + conflict → replace retries only the conflict, records are
+    /// never duplicated, and the retain rule keeps temp exactly while a
+    /// conflict retry may still need it.
+    #[test]
+    fn confirm_git_install_conflict_then_replace() {
+        let repo = test_repo();
+        let skills_tmp = tempdir().unwrap();
+        let _skills_guard = SkillsOverrideGuard;
+        central_repo::set_runtime_skills_dir_override(Some(skills_tmp.path().to_path_buf()));
+
+        let fixture_base = tempdir().unwrap();
+        let temp = init_confirm_fixture(fixture_base.path());
+        let url = temp.display().to_string();
+        let (items, _scan_root) = discover_fixture_items(&temp, &url);
+        assert_eq!(items.len(), 2, "fixture must offer two skills");
+
+        // First pass installs both; nothing to retain.
+        let outcomes =
+            confirm_git_install_inner(&repo.store, &url, &temp, &items, "user", None, false, None)
+                .unwrap();
+        assert_eq!(outcomes.len(), 2);
+        assert!(outcomes.iter().all(|o| o.status == "installed"));
+        assert!(!git_confirm_should_retain_temp(&outcomes));
+        assert_eq!(repo.store.get_all_skills().unwrap().len(), 2);
+
+        // Same skill again without replace → conflict, temp retained.
+        let ga_only = vec![items[0].clone()];
+        let outcomes =
+            confirm_git_install_inner(&repo.store, &url, &temp, &ga_only, "user", None, false, None)
+                .unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].status, "conflict");
+        assert!(git_confirm_should_retain_temp(&outcomes));
+
+        // Replace retries only the conflict: installed, still one record per
+        // skill, and the new content actually landed.
+        let ga_dir = temp
+            .join("skills")
+            .join(items[0].rel_path.split('/').last().unwrap_or("ga"));
+        fs::write(
+            ga_dir.join("SKILL.md"),
+            "---\nname: git-ga\n---\nga v2\n",
+        )
+        .unwrap();
+        let outcomes =
+            confirm_git_install_inner(&repo.store, &url, &temp, &ga_only, "user", None, true, None)
+                .unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].status, "installed");
+        assert!(!git_confirm_should_retain_temp(&outcomes));
+        assert_eq!(repo.store.get_all_skills().unwrap().len(), 2);
+        let dest = outcomes[0].dest_path.clone().expect("installed has a path");
+        let installed = fs::read_to_string(Path::new(&dest).join("SKILL.md")).unwrap();
+        assert!(installed.contains("ga v2"), "replace must land new content");
+    }
+
+    /// installed + failed keeps the temp alive; retrying only the failed item
+    /// leaves the installed record (and content) untouched.
+    #[test]
+    fn confirm_git_install_failed_items_retain_temp() {
+        let repo = test_repo();
+        let skills_tmp = tempdir().unwrap();
+        let _skills_guard = SkillsOverrideGuard;
+        central_repo::set_runtime_skills_dir_override(Some(skills_tmp.path().to_path_buf()));
+
+        let fixture_base = tempdir().unwrap();
+        let temp = init_confirm_fixture(fixture_base.path());
+        let url = temp.display().to_string();
+        let (items, _scan_root) = discover_fixture_items(&temp, &url);
+        assert_eq!(items.len(), 2, "fixture must offer two skills");
+
+        // One good item, one whose name can never sanitize: installed + failed.
+        let mixed = vec![
+            items[0].clone(),
+            SkillInstallItem {
+                rel_path: items[1].rel_path.clone(),
+                name: "../evil".to_string(),
+            },
+        ];
+        let outcomes = confirm_git_install_inner(
+            &repo.store, &url, &temp, &mixed, "user", None, false, None,
+        )
+        .unwrap();
+        assert_eq!(outcomes.len(), 2);
+        assert!(outcomes.iter().any(|o| o.status == "installed"));
+        assert!(outcomes.iter().any(|o| o.status == "failed"));
+        assert!(
+            git_confirm_should_retain_temp(&outcomes),
+            "temp must survive while a retry is possible"
+        );
+        assert_eq!(repo.store.get_all_skills().unwrap().len(), 1);
+
+        // Retry submits only the failed item: still failed, installed record
+        // and content untouched.
+        let failed_only = vec![SkillInstallItem {
+            rel_path: items[1].rel_path.clone(),
+            name: "../evil".to_string(),
+        }];
+        let outcomes = confirm_git_install_inner(
+            &repo.store, &url, &temp, &failed_only, "user", None, false, None,
+        )
+        .unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].status, "failed");
+        assert_eq!(repo.store.get_all_skills().unwrap().len(), 1);
+    }
+
+    /// Project installs land in `<project>/.agents/skills` with no records.
+    #[test]
+    fn confirm_git_install_project_scope_is_filesystem_only() {
+        let repo = test_repo();
+        let proj_root = repo._tmp.path().join("proj");
+        fs::create_dir_all(&proj_root).unwrap();
+        repo.store
+            .insert_project(&crate::core::skill_store::ProjectRecord {
+                id: "p1".to_string(),
+                name: "proj".to_string(),
+                path: proj_root.display().to_string(),
+                workspace_type: "project".to_string(),
+                linked_agent_key: None,
+                linked_agent_name: None,
+                disabled_path: None,
+                sort_order: 0,
+                created_at: 0,
+                updated_at: 0,
+            })
+            .unwrap();
+
+        let fixture_base = tempdir().unwrap();
+        let temp = init_confirm_fixture(fixture_base.path());
+        let url = temp.display().to_string();
+        let (items, _scan_root) = discover_fixture_items(&temp, &url);
+        assert_eq!(items.len(), 2, "fixture must offer two skills");
+        let items = vec![items[0].clone()];
+
+        let outcomes = confirm_git_install_inner(
+            &repo.store,
+            &url,
+            &temp,
+            &items,
+            "project",
+            Some("p1"),
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].status, "installed");
+        let dest = outcomes[0].dest_path.clone().expect("installed has a path");
+        assert!(Path::new(&dest).join("SKILL.md").exists());
+        assert!(
+            dest.contains(".agents"),
+            "project installs land under .agents/skills, got {dest}"
+        );
+        assert!(
+            repo.store.get_all_skills().unwrap().is_empty(),
+            "project installs keep no records"
+        );
+    }
+
+    /// Insert a `local` skill whose library copy is `central_body` and whose
 
     /// Insert a `local` skill whose library copy is `central_body` and whose
     /// original source path holds `source_body`, with the stored hash recorded
@@ -3800,6 +4578,9 @@ mod tests {
             Some(PrefetchedRemote {
                 key: remote("https://example.test/a.git", None),
                 result: Err("could not read from remote".to_string()),
+                subpath_hash: None,
+                subpath: None,
+                locator_skill_id: None,
             }),
         )
         .unwrap_err();
