@@ -304,7 +304,7 @@ pub struct GitPreviewResult {
     pub skills: Vec<GitSkillPreview>,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize)]
 pub struct SkillInstallItem {
     pub rel_path: String,
     pub name: String,
