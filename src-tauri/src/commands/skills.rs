@@ -4304,6 +4304,19 @@ mod tests {
         }
     }
 
+    /// Build install items exactly like the frontend does from a preview:
+    /// resolve the scan root, collect skill dirs, key them relative to it.
+    fn discover_fixture_items(temp: &Path, url: &str) -> (Vec<SkillInstallItem>, PathBuf) {
+        let parsed = git_fetcher::parse_git_source_resolved(url, None);
+        let scan_root =
+            resolve_skill_dir(temp, parsed.subpath.as_deref(), None).expect("scan root");
+        let items = collect_git_skill_dirs(&scan_root)
+            .iter()
+            .map(|dir| install_item(&skill_rel_key(&scan_root, dir), ""))
+            .collect();
+        (items, scan_root)
+    }
+
     /// installed + conflict → replace retries only the conflict, records are
     /// never duplicated, and the retain rule keeps temp exactly while a
     /// conflict retry may still need it.
@@ -4317,10 +4330,8 @@ mod tests {
         let fixture_base = tempdir().unwrap();
         let temp = init_confirm_fixture(fixture_base.path());
         let url = temp.display().to_string();
-        let items = vec![
-            install_item("skills/ga", "git-ga"),
-            install_item("skills/gb", ""),
-        ];
+        let (items, _scan_root) = discover_fixture_items(&temp, &url);
+        assert_eq!(items.len(), 2, "fixture must offer two skills");
 
         // First pass installs both; nothing to retain.
         let outcomes =
@@ -4332,7 +4343,7 @@ mod tests {
         assert_eq!(repo.store.get_all_skills().unwrap().len(), 2);
 
         // Same skill again without replace → conflict, temp retained.
-        let ga_only = vec![install_item("skills/ga", "git-ga")];
+        let ga_only = vec![items[0].clone()];
         let outcomes =
             confirm_git_install_inner(&repo.store, &url, &temp, &ga_only, "user", None, false, None)
                 .unwrap();
@@ -4342,8 +4353,11 @@ mod tests {
 
         // Replace retries only the conflict: installed, still one record per
         // skill, and the new content actually landed.
+        let ga_dir = temp
+            .join("skills")
+            .join(items[0].rel_path.split('/').last().unwrap_or("ga"));
         fs::write(
-            temp.join("skills/ga/SKILL.md"),
+            ga_dir.join("SKILL.md"),
             "---\nname: git-ga\n---\nga v2\n",
         )
         .unwrap();
@@ -4354,8 +4368,8 @@ mod tests {
         assert_eq!(outcomes[0].status, "installed");
         assert!(!git_confirm_should_retain_temp(&outcomes));
         assert_eq!(repo.store.get_all_skills().unwrap().len(), 2);
-        let installed = fs::read_to_string(skills_tmp.path().join("git-ga").join("SKILL.md"))
-            .unwrap();
+        let dest = outcomes[0].dest_path.clone().expect("installed has a path");
+        let installed = fs::read_to_string(Path::new(&dest).join("SKILL.md")).unwrap();
         assert!(installed.contains("ga v2"), "replace must land new content");
     }
 
@@ -4383,7 +4397,9 @@ mod tests {
         let fixture_base = tempdir().unwrap();
         let temp = init_confirm_fixture(fixture_base.path());
         let url = temp.display().to_string();
-        let items = vec![install_item("skills/ga", "")];
+        let (items, _scan_root) = discover_fixture_items(&temp, &url);
+        assert_eq!(items.len(), 2, "fixture must offer two skills");
+        let items = vec![items[0].clone()];
 
         let outcomes = confirm_git_install_inner(
             &repo.store,
@@ -4398,12 +4414,12 @@ mod tests {
         .unwrap();
         assert_eq!(outcomes.len(), 1);
         assert_eq!(outcomes[0].status, "installed");
-        assert!(proj_root
-            .join(".agents")
-            .join("skills")
-            .join("git-ga")
-            .join("SKILL.md")
-            .exists());
+        let dest = outcomes[0].dest_path.clone().expect("installed has a path");
+        assert!(Path::new(&dest).join("SKILL.md").exists());
+        assert!(
+            dest.contains(".agents"),
+            "project installs land under .agents/skills, got {dest}"
+        );
         assert!(
             repo.store.get_all_skills().unwrap().is_empty(),
             "project installs keep no records"
