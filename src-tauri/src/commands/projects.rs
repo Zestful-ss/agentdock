@@ -1031,22 +1031,15 @@ pub async fn export_skill_to_project(
     let _ = agents;
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let project = store
-            .get_project_by_id(&project_id)
-            .map_err(AppError::db)?
-            .ok_or_else(|| AppError::not_found("Workspace not found"))?;
         let skill = store
             .get_skill_by_id(&skill_id)
             .map_err(AppError::db)?
             .ok_or_else(|| AppError::not_found("Skill not found"))?;
         let source = PathBuf::from(&skill.central_path);
-        let dest_root = crate::core::paths::project_agents_skills_dir(Path::new(&project.path));
-        std::fs::create_dir_all(&dest_root).map_err(AppError::io)?;
-        let dir_name = crate::core::sync_engine::target_dir_name(&source, &skill.name);
-        ensure_safe_skill_relative_path(&dir_name)?;
-        let dest = dest_root.join(&dir_name);
-        crate::core::installer::install_skill_dir_to_destination(&source, &dir_name, &dest)
-            .map_err(AppError::io)?;
+        // Backend-resolved canonical project root; harness dirs are never targets.
+        let (_, resolved) = crate::core::canonical::resolve_project_root(&store, &project_id)?;
+        // Missing → install; existing → target_conflict (frontend: Replace/Cancel).
+        crate::core::canonical::install_skill_dir(&source, &resolved, false)?;
         Ok(())
     })
     .await?
@@ -1104,15 +1097,19 @@ pub async fn update_project_skill_from_center(
         }
 
         let source = PathBuf::from(&managed.central_path);
-        if !crate::core::v1::is_canonical_agents_skills_path(&target_path) {
-            return Err(crate::core::v1::blocked_write());
-        }
-        crate::core::installer::install_skill_dir_to_destination(
+        // V1: the target must already be a managed skill inside the canonical
+        // project root. Resolve backend-side; harness dirs are never targets.
+        let (_, resolved) = crate::core::canonical::resolve_project_root(&store, &project_id)?;
+        let target_name = crate::core::canonical::sanitize_component(&skill.dir_name)?;
+        let target_path = resolved.root.join(&target_name);
+        crate::core::canonical::validate_existing_skill(&resolved, &target_path)?;
+        // UserConfirmed update: explicitly replace the canonical copy.
+        crate::core::canonical::install_skill_dir_as(
             &source,
-            &skill.dir_name,
-            &target_path,
-        )
-        .map_err(AppError::io)?;
+            &resolved,
+            &target_name,
+            true,
+        )?;
         Ok(())
     })
     .await?
@@ -1139,20 +1136,11 @@ pub async fn delete_project_skill(
     let _ = agent;
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        ensure_safe_skill_relative_path(&skill_relative_path)?;
-        let record = store
-            .get_project_by_id(&project_id)
-            .map_err(AppError::db)?
-            .ok_or_else(|| AppError::not_found("Workspace not found"))?;
-        let skills_root = crate::core::paths::project_agents_skills_dir(Path::new(&record.path));
-        let target = skills_root.join(&skill_relative_path);
-        if !crate::core::v1::is_canonical_agents_skills_path(&target) {
-            return Err(crate::core::v1::blocked_write());
-        }
-        ensure_dir_within_root(&target, &skills_root)?;
-        if target.is_dir() {
-            std::fs::remove_dir_all(&target).map_err(AppError::io)?;
-        }
+        // Backend-resolved canonical project root; the relative path is
+        // re-sanitized to a single component inside it.
+        let (_, resolved) = crate::core::canonical::resolve_project_root(&store, &project_id)?;
+        let name = crate::core::canonical::sanitize_component(&skill_relative_path)?;
+        crate::core::canonical::delete_skill(&resolved, &name)?;
         Ok(())
     })
     .await?

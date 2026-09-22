@@ -1045,6 +1045,10 @@ pub fn run() {
             commands::inventory::get_mcp_inventory,
             commands::inventory::adopt_skill_to_user,
             commands::inventory::adopt_skill_to_project,
+            commands::inventory::delete_canonical_skill,
+            commands::inventory::read_canonical_skill_document,
+            commands::inventory::save_canonical_skill_document,
+            commands::inventory::run_legacy_migration,
             commands::inventory::get_canonical_roots,
             // Browse
             commands::browse::fetch_leaderboard,

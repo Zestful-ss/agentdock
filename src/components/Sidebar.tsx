@@ -70,8 +70,6 @@ export function Sidebar() {
   const projectReorderQueueRef = useRef<Promise<void>>(Promise.resolve());
   const [presetsOpen, setPresetsOpen] = useState(true);
   const [projectsOpen, setProjectsOpen] = useState(true);
-  const [globalWorkspaceOpen, setGlobalWorkspaceOpen] = useState(true);
-  const [lobsterWorkspaceOpen, setLobsterWorkspaceOpen] = useState(true);
 
   const globalSkillsByAgent = useMemo(() => {
     const map: Record<string, number> = {};
@@ -374,8 +372,6 @@ export function Sidebar() {
 
   void orderedCodingTools;
   void orderedLobsterTools;
-  void globalWorkspaceOpen;
-  void lobsterWorkspaceOpen;
   void renderToolGroup;
 
   return (

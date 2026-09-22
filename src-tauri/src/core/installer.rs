@@ -246,7 +246,7 @@ fn unique_skill_dest(parent: &Path, sanitized_name: &str, source: &Path) -> Resu
     Ok(parent.join(sanitized_name))
 }
 
-fn copy_skill_dir(src: &Path, dst: &Path) -> Result<()> {
+pub(crate) fn copy_skill_dir(src: &Path, dst: &Path) -> Result<()> {
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;

@@ -52,18 +52,24 @@ pub struct McpEntry {
 pub struct McpHarnessStatus {
     pub harness: String,
     pub display_name: String,
+    /// Transport observed in *this* harness's own config. Never sampled from
+    /// another harness: same name + different config = different rows here.
+    pub transport: McpTransport,
+    /// `Some(true/false)` when the source config states it, `None` when the
+    /// harness format carries no enable flag. `None` means "Configured",
+    /// never "Enabled".
     pub source_enabled: Option<bool>,
     pub source_path: String,
     pub configured: bool,
 }
 
+/// One MCP server name across harnesses. V1 deliberately carries no
+/// command/args/url/env/headers/raw_config to the WebView: this is an
+/// inventory, not a debugger, and those fields routinely contain secrets
+/// (`--api-key`, `Authorization: Bearer …`, `?token=` URLs).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpInventoryRow {
     pub name: String,
-    pub transport: McpTransport,
-    pub command: Option<String>,
-    pub args: Vec<String>,
-    pub url: Option<String>,
     pub sources: Vec<McpHarnessStatus>,
 }
 
@@ -311,7 +317,6 @@ pub fn inventory_rows(entries: &[McpEntry]) -> Vec<McpInventoryRow> {
         .into_iter()
         .map(|name| {
             let matching: Vec<&McpEntry> = entries.iter().filter(|e| e.name == name).collect();
-            let sample = matching.first().copied();
             let sources = adapters
                 .iter()
                 .map(|adapter| {
@@ -319,22 +324,16 @@ pub fn inventory_rows(entries: &[McpEntry]) -> Vec<McpInventoryRow> {
                     McpHarnessStatus {
                         harness: adapter.id.clone(),
                         display_name: adapter.name.clone(),
+                        transport: hit
+                            .map(|e| e.transport.clone())
+                            .unwrap_or(McpTransport::Unknown),
                         source_enabled: hit.map(|e| e.source_enabled).unwrap_or(None),
                         source_path: hit.map(|e| e.source_path.clone()).unwrap_or_default(),
                         configured: hit.is_some(),
                     }
                 })
                 .collect();
-            McpInventoryRow {
-                name,
-                transport: sample
-                    .map(|e| e.transport.clone())
-                    .unwrap_or(McpTransport::Unknown),
-                command: sample.and_then(|e| e.command.clone()),
-                args: sample.map(|e| e.args.clone()).unwrap_or_default(),
-                url: sample.and_then(|e| e.url.clone()),
-                sources,
-            }
+            McpInventoryRow { name, sources }
         })
         .collect()
 }
@@ -448,9 +447,20 @@ pub fn discover_skills() -> Vec<SkillInventoryRow> {
 }
 
 pub fn discover_project_skills(project_root: &Path) -> Vec<SkillInventoryRow> {
+    let managed_root = paths::project_agents_skills_dir(project_root);
+    discover_project_skills_at(&managed_root, project_root)
+}
+
+/// Project inventory against an already-resolved canonical root.
+/// `managed_root` must be `<project>/.agents/skills` (resolved backend-side
+/// from the project id); discovered rows still come from the harness-relative
+/// project paths joined onto `project_root`.
+pub fn discover_project_skills_at(
+    managed_root: &Path,
+    project_root: &Path,
+) -> Vec<SkillInventoryRow> {
     let mut rows = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    let managed_root = paths::project_agents_skills_dir(project_root);
     let native: Vec<String> = v1::native_consumers()
         .iter()
         .map(|s| s.to_string())
@@ -506,4 +516,79 @@ pub fn discover_project_skills(project_root: &Path) -> Vec<SkillInventoryRow> {
         }
     }
     rows
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(harness: &str, name: &str, transport: McpTransport, enabled: Option<bool>) -> McpEntry {
+        McpEntry {
+            id: format!("{harness}:{name}"),
+            name: name.to_string(),
+            transport,
+            command: None,
+            args: Vec::new(),
+            env: BTreeMap::new(),
+            url: None,
+            headers: BTreeMap::new(),
+            source_enabled: enabled,
+            scope: InventoryScope::User,
+            source_harness: harness.to_string(),
+            source_path: format!("/fake/{harness}"),
+            raw_config: Value::Null,
+            content_hash: "hash".to_string(),
+            read_only: true,
+        }
+    }
+
+    #[test]
+    fn same_name_keeps_per_source_transport() {
+        // exa over HTTP in one harness and stdio in another must not collapse
+        // into a single sampled transport.
+        let entries = vec![
+            entry("opencode", "exa", McpTransport::StreamableHttp, Some(true)),
+            entry("maka", "exa", McpTransport::Stdio, None),
+        ];
+        let rows = inventory_rows(&entries);
+        assert_eq!(rows.len(), 1);
+        let sources: std::collections::HashMap<_, _> = rows[0]
+            .sources
+            .iter()
+            .filter(|s| s.configured)
+            .map(|s| (s.harness.as_str(), s))
+            .collect();
+        assert_eq!(
+            sources["opencode"].transport,
+            McpTransport::StreamableHttp
+        );
+        assert_eq!(sources["maka"].transport, McpTransport::Stdio);
+        assert_eq!(sources["opencode"].source_enabled, Some(true));
+        // Unknown enablement stays unknown; the UI renders it "Configured".
+        assert_eq!(sources["maka"].source_enabled, None);
+    }
+
+    #[test]
+    fn unconfigured_harnesses_carry_no_transport() {
+        let entries = vec![entry("maka", "solo", McpTransport::Stdio, Some(false))];
+        let rows = inventory_rows(&entries);
+        let unconfigured = rows[0]
+            .sources
+            .iter()
+            .find(|s| s.harness == "codex")
+            .unwrap();
+        assert!(!unconfigured.configured);
+        assert_eq!(unconfigured.transport, McpTransport::Unknown);
+    }
+
+    #[test]
+    fn wire_rows_carry_no_secrets() {
+        // The serialized row must not contain command/args/url/env/headers.
+        let entries = vec![entry("maka", "solo", McpTransport::Stdio, None)];
+        let rows = inventory_rows(&entries);
+        let json = serde_json::to_value(&rows).unwrap().to_string();
+        for forbidden in ["command", "args", "raw_config", "headers", "\"env\""] {
+            assert!(!json.contains(forbidden), "leaked {forbidden}");
+        }
+    }
 }

@@ -18,13 +18,6 @@ pub fn is_canonical_project_skills_dir(relative: &str) -> bool {
     trimmed.eq_ignore_ascii_case(".agents/skills")
 }
 
-/// True when `path` is inside a canonical `.agents/skills` tree.
-pub fn is_canonical_agents_skills_path(path: &std::path::Path) -> bool {
-    let raw = path.to_string_lossy();
-    let normalized = raw.replace('\\', "/").to_ascii_lowercase();
-    normalized.contains("/.agents/skills") || normalized.ends_with("/.agents/skills")
-}
-
 pub const V1_ADAPTER_IDS: &[&str] = &[
     "codex",
     "claude_code",
@@ -54,7 +47,6 @@ pub fn is_native_consumer(id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     #[test]
     fn project_canonical_dir_is_agents_skills() {
@@ -62,15 +54,5 @@ mod tests {
         assert!(is_canonical_project_skills_dir(".agents\\skills"));
         assert!(!is_canonical_project_skills_dir(".codex/skills"));
         assert!(!is_canonical_project_skills_dir(".agent/skills"));
-    }
-
-    #[test]
-    fn windows_path_detects_canonical_tree() {
-        assert!(is_canonical_agents_skills_path(Path::new(
-            r"C:\Users\charm\.agents\skills\paper-lookup"
-        )));
-        assert!(!is_canonical_agents_skills_path(Path::new(
-            r"C:\Users\charm\.codex\skills\paper-lookup"
-        )));
     }
 }
