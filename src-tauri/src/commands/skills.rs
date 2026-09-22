@@ -4272,16 +4272,6 @@ mod tests {
         }
     }
 
-    fn git_cli(dir: &Path, args: &[&str]) {
-        let status = std::process::Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(args)
-            .status()
-            .expect("git must be runnable in tests");
-        assert!(status.success(), "git {args:?} failed in {}", dir.display());
-    }
-
     /// Temp "clone" dir with two skills and a real git history, shaped like
     /// what preview hands to confirm.
     fn init_confirm_fixture(base: &Path) -> PathBuf {
