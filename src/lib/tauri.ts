@@ -838,3 +838,68 @@ export const updateGlobalLocalSkillFromCenter = (agent: string, skillRelativePat
 
 export const deleteGlobalLocalSkill = (agent: string, skillRelativePath: string) =>
   invoke<void>("delete_global_local_skill", { agent, skillRelativePath });
+
+// ── V1 Inventory ──
+
+export type SkillLifecycle =
+  | "managed"
+  | "discovered"
+  | "read_only"
+  | "system"
+  | "conflict"
+  | "update_available";
+
+export interface SkillInventoryRow {
+  name: string;
+  status: SkillLifecycle;
+  path: string;
+  source_harness: string;
+  source_display_name: string;
+  description: string | null;
+  fingerprint: string | null;
+  system: boolean;
+  read_only: boolean;
+  native_consumers: string[];
+}
+
+export type McpTransport = "stdio" | "streamable_http" | "legacy_sse" | "unknown";
+
+export interface McpHarnessStatus {
+  harness: string;
+  display_name: string;
+  source_enabled: boolean | null;
+  source_path: string;
+  configured: boolean;
+}
+
+export interface McpInventoryRow {
+  name: string;
+  transport: McpTransport;
+  command: string | null;
+  args: string[];
+  url: string | null;
+  sources: McpHarnessStatus[];
+}
+
+export interface CanonicalRoots {
+  user_skills: string;
+  native_consumers: string[];
+}
+
+export const getSkillInventory = () =>
+  invoke<SkillInventoryRow[]>("get_skill_inventory");
+
+export const getProjectSkillInventory = (projectPath: string) =>
+  invoke<SkillInventoryRow[]>("get_project_skill_inventory", { projectPath });
+
+export const getMcpInventory = () =>
+  invoke<McpInventoryRow[]>("get_mcp_inventory");
+
+export const adoptSkillToUser = (sourcePath: string) =>
+  invoke<string>("adopt_skill_to_user", { sourcePath });
+
+export const adoptSkillToProject = (sourcePath: string, projectPath: string) =>
+  invoke<string>("adopt_skill_to_project", { sourcePath, projectPath });
+
+export const getCanonicalRoots = () =>
+  invoke<CanonicalRoots>("get_canonical_roots");

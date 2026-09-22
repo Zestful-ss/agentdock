@@ -944,6 +944,7 @@ pub fn all_tool_adapters(store: &crate::core::skill_store::SkillStore) -> Vec<To
 
     let mut adapters: Vec<ToolAdapter> = default_tool_adapters()
         .into_iter()
+        .filter(|adapter| crate::core::v1::is_v1_adapter(&adapter.key))
         .map(|mut adapter| {
             apply_builtin_path_overrides(&mut adapter, &overrides, &project_overrides);
             adapter
@@ -974,7 +975,10 @@ pub fn find_adapter_with_store(
     let project_overrides = custom_tool_project_paths(store);
     let customs = custom_tools(store);
 
-    if let Some(mut adapter) = default_tool_adapters().into_iter().find(|a| a.key == key) {
+    if let Some(mut adapter) = default_tool_adapters()
+        .into_iter()
+        .find(|a| a.key == key && crate::core::v1::is_v1_adapter(&a.key))
+    {
         apply_builtin_path_overrides(&mut adapter, &overrides, &project_overrides);
         return Some(adapter);
     }

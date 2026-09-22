@@ -6,7 +6,6 @@ import {
   Layers,
   Globe,
   Download,
-  CloudUpload,
   Settings,
   Plus,
   Pencil,
@@ -166,9 +165,8 @@ export function Sidebar() {
 
   const NAV_ITEMS = [
     { name: t("sidebar.dashboard"), path: "/", icon: LayoutDashboard },
-    { name: t("sidebar.mySkills"), path: "/my-skills", icon: Layers },
+    { name: "Skills / MCP", path: "/inventory", icon: Layers },
     { name: t("sidebar.installSkills"), path: "/install", icon: Download },
-    { name: t("sidebar.backup"), path: "/backup", icon: CloudUpload },
   ];
 
   const handleSwitchPreset = (id: string) => {
@@ -374,6 +372,12 @@ export function Sidebar() {
     );
   };
 
+  void orderedCodingTools;
+  void orderedLobsterTools;
+  void globalWorkspaceOpen;
+  void lobsterWorkspaceOpen;
+  void renderToolGroup;
+
   return (
     <>
       <div className="w-[220px] flex-shrink-0 bg-bg-secondary border-r border-border-subtle h-full flex flex-col select-none relative z-10">
@@ -540,43 +544,7 @@ export function Sidebar() {
           {/* Divider */}
           <div className="mx-0.5 mt-3.5 mb-2.5 border-t border-border-subtle" />
 
-          {renderToolGroup({
-            category: "coding",
-            headingLabel: t("sidebar.globalWorkspace"),
-            allAgentsLabel: t("globalWorkspace.allAgents"),
-            emptyLabel: t("globalWorkspace.noAgents"),
-            basePath: "/global-workspace",
-            droppableId: "global-workspace-tools",
-            tools: orderedCodingTools,
-            isOpen: globalWorkspaceOpen,
-            onToggle: () => setGlobalWorkspaceOpen((v) => !v),
-            // Always show the Global Workspace section (even when empty) so users
-            // with no detected coding agents still see the "All Agents" entry.
-            hideWhenEmpty: false,
-          })}
-
-          {installedLobsterTools.length > 0 && (
-            <>
-              {/* Divider */}
-              <div className="mx-0.5 mt-3.5 mb-2.5 border-t border-border-subtle" />
-
-              {renderToolGroup({
-                category: "lobster",
-                headingLabel: t("sidebar.lobsterAgents"),
-                allAgentsLabel: t("lobsterWorkspace.allAgents"),
-                emptyLabel: t("lobsterWorkspace.noAgents"),
-                basePath: "/lobster-workspace",
-                droppableId: "lobster-workspace-tools",
-                tools: orderedLobsterTools,
-                isOpen: lobsterWorkspaceOpen,
-                onToggle: () => setLobsterWorkspaceOpen((v) => !v),
-                hideWhenEmpty: true,
-              })}
-            </>
-          )}
-
-          {/* Divider */}
-          <div className="mx-0.5 mt-3.5 mb-2.5 border-t border-border-subtle" />
+          {/* V1: harness workspaces are discovery-only; hidden from nav. */}
 
           {/* ── Projects ── */}
           <div className="mb-1.5 px-2.5 flex items-center gap-1">

@@ -1010,101 +1010,13 @@ pub async fn install_git(
 
 #[tauri::command]
 pub async fn install_from_skillssh(
-    source: String,
-    skill_id: String,
-    store: State<'_, Arc<SkillStore>>,
-    cancel_registry: State<'_, Arc<InstallCancelRegistry>>,
-    app_handle: tauri::AppHandle,
+    _source: String,
+    _skill_id: String,
+    _store: State<'_, Arc<SkillStore>>,
+    _cancel_registry: State<'_, Arc<InstallCancelRegistry>>,
+    _app_handle: tauri::AppHandle,
 ) -> Result<(), AppError> {
-    let store = store.inner().clone();
-    let proxy_url = store.proxy_url();
-    let registry = cancel_registry.inner().clone();
-    let cancel_key_owned = format!("{}/{}", source, skill_id);
-    let cancel = registry.register(&cancel_key_owned);
-    let _cancel_guard = CancelRegistrationGuard::new(registry.clone(), cancel_key_owned);
-
-    tauri::async_runtime::spawn_blocking(move || {
-        use tauri::Emitter;
-        let skill_key = format!("{}/{}", source, skill_id);
-        let emit_progress = |phase: &str| {
-            app_handle
-                .emit(
-                    "install-progress",
-                    serde_json::json!({
-                        "skill_id": skill_key,
-                        "phase": phase,
-                    }),
-                )
-                .ok();
-        };
-
-        let outcome = (|| -> Result<(String, String), AppError> {
-            emit_progress("cloning");
-            let repo_url = format!("https://github.com/{}.git", source);
-            let app_for_progress = app_handle.clone();
-            let skill_key_for_progress = skill_key.clone();
-            let progress_cb: git_fetcher::ProgressCallback = Box::new(move |msg: &str| {
-                app_for_progress
-                    .emit(
-                        "install-progress",
-                        serde_json::json!({
-                            "skill_id": skill_key_for_progress,
-                            "phase": "cloning",
-                            "detail": msg,
-                        }),
-                    )
-                    .ok();
-            });
-            let temp_dir = git_fetcher::clone_repo_ref_with_progress(
-                &repo_url,
-                None,
-                Some(&cancel),
-                proxy_url.as_deref(),
-                Some(progress_cb),
-            )
-            .map_err(AppError::classify_git_error)?;
-
-            emit_progress("installing");
-            let install_result = (|| -> Result<(String, String), AppError> {
-                let _lock =
-                    RepoLock::acquire_foreground("install skillssh skill").map_err(AppError::db)?;
-                let skill_dir = resolve_skill_dir(&temp_dir, None, Some(&skill_id))?;
-                let revision = git_fetcher::get_head_revision(&temp_dir).map_err(AppError::git)?;
-                let source_ref = format!("{}/{}", source, skill_id);
-                let (install_name, destination) =
-                    resolve_skillssh_install_target(&store, &source_ref, &skill_id)?;
-                let result = installer::install_skill_dir_to_destination(
-                    &skill_dir,
-                    &install_name,
-                    &destination,
-                )
-                .map_err(AppError::io)?;
-                let metadata = InstallSourceMetadata {
-                    source_type: "skillssh".to_string(),
-                    source_ref: Some(source_ref),
-                    source_ref_resolved: Some(repo_url.clone()),
-                    source_subpath: git_fetcher::relative_subpath(&temp_dir, &skill_dir),
-                    source_branch: None,
-                    source_revision: Some(revision.clone()),
-                    remote_revision: Some(revision),
-                    update_status: "up_to_date".to_string(),
-                };
-                let skill_name = result.name.clone();
-                let new_id = store_installed_skill_unlocked(&store, &result, &metadata, None)?;
-                Ok((new_id, skill_name))
-            })();
-
-            git_fetcher::cleanup_temp(&temp_dir);
-            install_result
-        })();
-
-        log_install_outcome(&store, "skillssh", outcome.as_ref());
-        outcome?;
-
-        emit_progress("done");
-        Ok(())
-    })
-    .await?
+    Err(crate::core::v1::blocked_write())
 }
 
 /// Clone a git repo and return a preview list of skills found, without installing.

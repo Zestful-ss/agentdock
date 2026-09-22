@@ -1028,98 +1028,25 @@ pub async fn export_skill_to_project(
     project_id: String,
     agents: Option<Vec<String>>,
 ) -> Result<(), AppError> {
+    let _ = agents;
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let project = store
             .get_project_by_id(&project_id)
             .map_err(AppError::db)?
             .ok_or_else(|| AppError::not_found("Workspace not found"))?;
-
         let skill = store
             .get_skill_by_id(&skill_id)
             .map_err(AppError::db)?
             .ok_or_else(|| AppError::not_found("Skill not found"))?;
-
         let source = PathBuf::from(&skill.central_path);
-        let dir_name = sync_engine::target_dir_name(&source, &skill.name);
+        let dest_root = crate::core::paths::project_agents_skills_dir(Path::new(&project.path));
+        std::fs::create_dir_all(&dest_root).map_err(AppError::io)?;
+        let dir_name = crate::core::sync_engine::target_dir_name(&source, &skill.name);
         ensure_safe_skill_relative_path(&dir_name)?;
-        let requested_agent_keys = agents.filter(|items| !items.is_empty()).unwrap_or_else(|| {
-            if project.workspace_type == "linked" {
-                vec![linked_workspace_agent_key(&project)]
-            } else {
-                vec!["claude_code".to_string()]
-            }
-        });
-        let agent_keys = if project.workspace_type == "linked" {
-            requested_agent_keys
-        } else {
-            let available_targets: std::collections::HashSet<String> =
-                project_agent_targets_for_record(&store, &project)
-                    .into_iter()
-                    .filter(|target| target.installed && target.enabled)
-                    .map(|target| target.key)
-                    .collect();
-            let filtered = requested_agent_keys
-                .into_iter()
-                .filter(|key| available_targets.contains(key))
-                .collect::<Vec<_>>();
-            if filtered.is_empty() {
-                return Err(AppError::invalid_input(
-                    "No enabled installed agents selected for this project",
-                ));
-            }
-            filtered
-        };
-
-        for agent_key in &agent_keys {
-            let (skills_root, disabled_root) =
-                resolve_agent_skills_roots(&store, &project, agent_key)
-                    .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent_key)))?;
-            let target_dir = skills_root.join(&dir_name);
-
-            if target_dir.strip_prefix(&skills_root).is_err() {
-                return Err(AppError::invalid_input("Invalid skill directory path"));
-            }
-
-            if target_dir.exists()
-                || disabled_root
-                    .as_ref()
-                    .map(|path| path.join(&dir_name).exists())
-                    .unwrap_or(false)
-            {
-                return Err(AppError::invalid_input(format!(
-                    "Skill \"{}\" already exists in this workspace for agent {}",
-                    skill.name, agent_key
-                )));
-            }
-        }
-
-        let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
-        // Two agents can resolve to the same project skills root, in which case
-        // the second pass would find the directory the first just wrote and
-        // refuse it. The artifact is already correct, so skip instead.
-        let mut written: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
-        for agent_key in &agent_keys {
-            let (skills_root, _) = resolve_agent_skills_roots(&store, &project, agent_key)
-                .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent_key)))?;
-            let target_dir = skills_root.join(&dir_name);
-            if !written.insert(target_dir.clone()) {
-                continue;
-            }
-            std::fs::create_dir_all(&skills_root)?;
-            let mode = sync_engine::sync_mode_for_tool(agent_key, configured_mode.as_deref());
-            // NoClobber: the loop above already refused every pre-existing
-            // target, so nothing here should need replacing. Belt and braces —
-            // `exists()` misses dangling links and is racy against this write.
-            sync_engine::sync_skill(
-                &source,
-                &target_dir,
-                mode,
-                sync_engine::ReplacePolicy::NoClobber,
-            )
+        let dest = dest_root.join(&dir_name);
+        crate::core::installer::install_skill_dir_to_destination(&source, &dir_name, &dest)
             .map_err(AppError::io)?;
-        }
-
         Ok(())
     })
     .await?
@@ -1177,17 +1104,13 @@ pub async fn update_project_skill_from_center(
         }
 
         let source = PathBuf::from(&managed.central_path);
-        let configured_mode = store.get_setting("sync_mode").map_err(AppError::db)?;
-        let mode = sync_engine::sync_mode_for_tool(&agent, configured_mode.as_deref());
-        // UserConfirmed: this intentionally replaces an existing project copy
-        // the user chose to update, and project deployments never create
-        // `skill_targets` rows, so no record could vouch for it. The
-        // project_newer check above is the guard that makes this safe.
-        sync_engine::sync_skill(
+        if !crate::core::v1::is_canonical_agents_skills_path(&target_path) {
+            return Err(crate::core::v1::blocked_write());
+        }
+        crate::core::installer::install_skill_dir_to_destination(
             &source,
+            &skill.dir_name,
             &target_path,
-            mode,
-            sync_engine::ReplacePolicy::UserConfirmed,
         )
         .map_err(AppError::io)?;
         Ok(())
@@ -1197,30 +1120,13 @@ pub async fn update_project_skill_from_center(
 
 #[tauri::command]
 pub async fn toggle_project_skill(
-    store: State<'_, Arc<SkillStore>>,
-    project_id: String,
-    skill_relative_path: String,
-    agent: String,
-    enabled: bool,
+    _store: State<'_, Arc<SkillStore>>,
+    _project_id: String,
+    _skill_relative_path: String,
+    _agent: String,
+    _enabled: bool,
 ) -> Result<(), AppError> {
-    let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        ensure_safe_skill_relative_path(&skill_relative_path)?;
-
-        let record = store
-            .get_project_by_id(&project_id)
-            .map_err(AppError::db)?
-            .ok_or_else(|| AppError::not_found("Workspace not found"))?;
-
-        let (skills_dir, disabled_dir) = resolve_agent_skills_roots(&store, &record, &agent)
-            .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent)))?;
-        let disabled_dir = disabled_dir.ok_or_else(|| {
-            AppError::invalid_input("This workspace does not support disabling skills")
-        })?;
-
-        set_project_skill_enabled_state(&skills_dir, &disabled_dir, &skill_relative_path, enabled)
-    })
-    .await?
+    Err(crate::core::v1::blocked_write())
 }
 
 #[tauri::command]
@@ -1230,35 +1136,23 @@ pub async fn delete_project_skill(
     skill_relative_path: String,
     agent: String,
 ) -> Result<(), AppError> {
+    let _ = agent;
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         ensure_safe_skill_relative_path(&skill_relative_path)?;
-
         let record = store
             .get_project_by_id(&project_id)
             .map_err(AppError::db)?
             .ok_or_else(|| AppError::not_found("Workspace not found"))?;
-
-        let (skills_root, disabled_root) = resolve_agent_skills_roots(&store, &record, &agent)
-            .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent)))?;
-        let skills_dir = skills_root.join(&skill_relative_path);
-        let disabled_dir = disabled_root
-            .as_ref()
-            .map(|root| root.join(&skill_relative_path));
-
-        let (target, target_root) = if skills_dir.is_dir() {
-            (skills_dir, skills_root)
-        } else if let Some(disabled_dir) = disabled_dir.filter(|path| path.is_dir()) {
-            (
-                disabled_dir,
-                disabled_root.expect("present when disabled_dir exists"),
-            )
-        } else {
-            return Err(AppError::not_found("Skill directory not found"));
-        };
-
-        ensure_dir_within_root(&target, &target_root)?;
-        remove_workspace_skill_target(&target)?;
+        let skills_root = crate::core::paths::project_agents_skills_dir(Path::new(&record.path));
+        let target = skills_root.join(&skill_relative_path);
+        if !crate::core::v1::is_canonical_agents_skills_path(&target) {
+            return Err(crate::core::v1::blocked_write());
+        }
+        ensure_dir_within_root(&target, &skills_root)?;
+        if target.is_dir() {
+            std::fs::remove_dir_all(&target).map_err(AppError::io)?;
+        }
         Ok(())
     })
     .await?

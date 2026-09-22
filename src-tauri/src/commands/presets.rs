@@ -291,11 +291,11 @@ fn delete_preset_with_active_fallback_internal(
 /// preset clicks no longer call this.
 #[tauri::command]
 pub async fn apply_preset_to_default(
-    app: tauri::AppHandle,
-    id: String,
-    store: State<'_, Arc<SkillStore>>,
+    _app: tauri::AppHandle,
+    _id: String,
+    _store: State<'_, Arc<SkillStore>>,
 ) -> Result<(), AppError> {
-    apply_preset_to_default_impl(app, id, store.inner().clone()).await
+    Err(crate::core::v1::blocked_write())
 }
 
 /// Legacy command kept for the CLI and backward compatibility. New callers
@@ -303,11 +303,11 @@ pub async fn apply_preset_to_default(
 /// for the workspace-scoped variant the tray now uses).
 #[tauri::command]
 pub async fn switch_preset(
-    app: tauri::AppHandle,
-    id: String,
-    store: State<'_, Arc<SkillStore>>,
+    _app: tauri::AppHandle,
+    _id: String,
+    _store: State<'_, Arc<SkillStore>>,
 ) -> Result<(), AppError> {
-    apply_preset_to_default_impl(app, id, store.inner().clone()).await
+    Err(crate::core::v1::blocked_write())
 }
 
 async fn apply_preset_to_default_impl(
@@ -500,6 +500,16 @@ impl From<PresetApplyMode> for BatchApplyMode {
 /// and their own preset bar.
 #[tauri::command]
 pub async fn apply_preset_to_coding_agents(
+    _app: tauri::AppHandle,
+    _preset_id: String,
+    _mode: PresetApplyMode,
+    _store: State<'_, Arc<SkillStore>>,
+) -> Result<(), AppError> {
+    Err(crate::core::v1::blocked_write())
+}
+
+#[allow(dead_code)]
+pub async fn apply_preset_to_coding_agents_legacy(
     app: tauri::AppHandle,
     preset_id: String,
     mode: PresetApplyMode,
