@@ -62,15 +62,20 @@ pub async fn adopt_skill_to_user(
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let source = PathBuf::from(&source_path);
-        let resolved = canonical::resolve_user_root()?;
-        let dest = canonical::install_skill_dir(&source, &resolved, replace.unwrap_or(false))?;
-        let hash = content_hash::hash_directory(&dest).map_err(AppError::io)?;
-        let meta = skill_metadata::parse_skill_md(&dest);
-        let name = dest
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "skill".to_string());
+        // The whole User operation runs under the repo lock
+        // (RepoLock → fs → DB → metadata), so a concurrent git
+        // update/reimport can neither interleave nor leave
+        // "files changed, DB not changed" behind.
         sync_metadata::with_repo_lock("adopt skill", || {
+            let resolved = canonical::resolve_user_root()?;
+            let dest =
+                canonical::install_skill_dir(&source, &resolved, replace.unwrap_or(false))?;
+            let hash = content_hash::hash_directory(&dest).map_err(AppError::io)?;
+            let meta = skill_metadata::parse_skill_md(&dest);
+            let name = dest
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "skill".to_string());
             canonical::register_user_skill(
                 &store,
                 &UserSkillRegistration {
@@ -82,10 +87,10 @@ pub async fn adopt_skill_to_user(
                     source_ref: Some(source.display().to_string()),
                 },
             )
-            .map_err(anyhow::Error::from)
+            .map_err(anyhow::Error::from)?;
+            Ok(dest.display().to_string())
         })
-        .map_err(AppError::db)?;
-        Ok(dest.display().to_string())
+        .map_err(AppError::db)
     })
     .await
     .map_err(|e| AppError::internal(e.to_string()))?
@@ -130,16 +135,18 @@ pub async fn delete_canonical_skill(
             Ok(removed.display().to_string())
         }
         "user" => {
-            let resolved = canonical::resolve_user_root()?;
-            let removed = canonical::delete_skill(&resolved, &skill_name)?;
-            // Reconcile the index: drop records (and their stale deploy-target
-            // rows) for the deleted directory. Harness files are never touched.
+            // Whole operation under the repo lock (see adopt above).
             sync_metadata::with_repo_lock("delete canonical skill", || {
+                let resolved = canonical::resolve_user_root()?;
+                let removed = canonical::delete_skill(&resolved, &skill_name)?;
+                // Reconcile the index: drop records (and their stale
+                // deploy-target rows) for the deleted directory. Harness
+                // files are never touched.
                 canonical::remove_user_skill_records(&store, &removed)
-                    .map_err(anyhow::Error::from)
+                    .map_err(anyhow::Error::from)?;
+                Ok(removed.display().to_string())
             })
-            .map_err(AppError::db)?;
-            Ok(removed.display().to_string())
+            .map_err(AppError::db)
         }
         _ => Err(AppError::invalid_input("scope must be 'user' or 'project'")),
     })
@@ -192,15 +199,15 @@ pub async fn save_canonical_skill_document(
             Ok(saved.display().to_string())
         }
         "user" => {
-            let resolved = canonical::resolve_user_root()?;
-            let saved = canonical::save_skill_document(&resolved, &skill_name, &content)?;
-            // Reconcile the index so `content_hash/updated_at` stop being stale.
-            let skill_dir = saved
-                .parent()
-                .map(|p| p.to_path_buf())
-                .ok_or_else(|| AppError::internal("Saved skill has no parent directory"))?;
-            let hash = content_hash::hash_directory(&skill_dir).map_err(AppError::io)?;
+            // Whole operation under the repo lock (see adopt above).
             sync_metadata::with_repo_lock("save canonical skill", || {
+                let resolved = canonical::resolve_user_root()?;
+                let saved = canonical::save_skill_document(&resolved, &skill_name, &content)?;
+                // Reconcile the index so `content_hash/updated_at` stop being stale.
+                let skill_dir = saved.parent().map(|p| p.to_path_buf()).ok_or_else(|| {
+                    anyhow::anyhow!("Saved skill has no parent directory")
+                })?;
+                let hash = content_hash::hash_directory(&skill_dir).map_err(AppError::io)?;
                 let identity = crate::core::paths::identity_key(&skill_dir);
                 for record in store.get_all_skills()? {
                     if crate::core::paths::identity_key(std::path::Path::new(
@@ -214,10 +221,10 @@ pub async fn save_canonical_skill_document(
                         )?;
                     }
                 }
-                sync_metadata::write_all_from_db_unlocked(&store)
+                sync_metadata::write_all_from_db_unlocked(&store)?;
+                Ok(saved.display().to_string())
             })
-            .map_err(AppError::db)?;
-            Ok(saved.display().to_string())
+            .map_err(AppError::db)
         }
         _ => Err(AppError::invalid_input("scope must be 'user' or 'project'")),
     })

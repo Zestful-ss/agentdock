@@ -832,6 +832,28 @@ mod tests {
     }
 
     #[test]
+    fn replace_with_invalid_source_keeps_original() {
+        // Source validation happens before the destination is touched: a
+        // replace against an unusable source must fail with the managed skill
+        // byte-identical to before.
+        let tmp = tempdir().unwrap();
+        let (_t, resolved) = test_root();
+        let source = make_source(tmp.path(), "demo", "v1");
+        let dest = install_skill_dir(&source, &resolved, false).unwrap();
+
+        let bad = tmp.path().join("not-a-skill");
+        fs::create_dir_all(&bad).unwrap();
+        let err = install_skill_dir(&bad, &resolved, true).unwrap_err();
+        assert!(matches!(
+            err.kind,
+            super::super::error::ErrorKind::InvalidInput
+        ));
+        assert!(fs::read_to_string(dest.join("SKILL.md"))
+            .unwrap()
+            .contains("v1"));
+    }
+
+    #[test]
     fn delete_removes_only_the_named_skill() {
         let tmp = tempdir().unwrap();
         let (_t, resolved) = test_root();

@@ -73,7 +73,16 @@ pub fn swap_dir_staged(staged: &Path, current: &Path) -> Result<(), AppError> {
         )));
     }
 
-    remove_path_if_exists(&backup)?;
+    // Commit point is the rename above: the new content is live. Backup
+    // cleanup must never fail the operation afterwards (Windows AV/indexer
+    // locks can refuse the delete) or callers would report failure while the
+    // new skill is already in effect — and skip their DB reconcile.
+    if let Err(err) = remove_path_if_exists(&backup) {
+        log::warn!(
+            "staged swap: new content is live at {}, but backup cleanup failed: {err}",
+            current.display()
+        );
+    }
     Ok(())
 }
 
@@ -210,5 +219,29 @@ mod tests {
         let dest = tmp.path().join("final");
         assert!(install_via_stage(&bad, &dest, true).is_err());
         assert!(!dest.exists());
+    }
+
+    #[test]
+    fn swap_succeeds_even_when_backup_cleanup_fails() {
+        // The rename-in is the commit point: once the new content is live,
+        // a failing backup cleanup (Windows AV/indexer locks, read-only
+        // files) must degrade to a warning, never to an Err that would make
+        // callers skip their DB reconcile.
+        let tmp = tempdir().unwrap();
+        let source = make_source(tmp.path(), "src", "v1");
+        let dest = tmp.path().join("final");
+        install_via_stage(&source, &dest, false).unwrap();
+
+        let locked = dest.join("locked.txt");
+        fs::write(&locked, "old").unwrap();
+        let mut perms = fs::metadata(&locked).unwrap().permissions();
+        perms.set_readonly(true);
+        fs::set_permissions(&locked, perms).unwrap();
+
+        let source2 = make_source(tmp.path(), "src2", "v2");
+        install_via_stage(&source2, &dest, true).unwrap();
+        assert!(fs::read_to_string(dest.join("SKILL.md"))
+            .unwrap()
+            .contains("v2"));
     }
 }
