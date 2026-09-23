@@ -42,10 +42,23 @@ pub struct ResolvedRoot {
 
 impl ResolvedRoot {
     fn new(root: PathBuf) -> Result<Self, AppError> {
+        if fs::symlink_metadata(&root)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            return Err(AppError::invalid_input(
+                "Managed skills root must not be a symlink or junction",
+            ));
+        }
         fs::create_dir_all(&root).map_err(AppError::io)?;
         let canonical = root
             .canonicalize()
             .map_err(|e| AppError::io(format!("Cannot resolve skills root {}: {e}", root.display())))?;
+        if paths::identity_key(&root) != paths::identity_key(&canonical) {
+            return Err(AppError::invalid_input(
+                "Managed skills root must not be a symlink or junction",
+            ));
+        }
         Ok(Self { root, canonical })
     }
 }
@@ -90,6 +103,28 @@ pub fn resolve_project_root_for_read(
         .ok_or_else(|| AppError::not_found("Project not found"))?;
     let root = paths::project_agents_skills_dir(Path::new(&record.path));
     Ok((record.path, root))
+}
+
+/// Resolve and validate one existing canonical project skill without creating
+/// the project root. This is the read-side counterpart to
+/// [`resolve_project_root`].
+pub fn resolve_existing_project_skill(
+    store: &SkillStore,
+    project_id: &str,
+    skill_name: &str,
+) -> Result<PathBuf, AppError> {
+    let record = store
+        .get_project_by_id(project_id)
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found("Project not found"))?;
+    let root = paths::project_agents_skills_dir(Path::new(&record.path));
+    if !root.is_dir() {
+        return Err(AppError::not_found("Project skills directory not found"));
+    }
+    let resolved = ResolvedRoot::new(root)?;
+    let skill_dir = skill_dir(&resolved, skill_name)?;
+    validate_existing_skill(&resolved, &skill_dir)?;
+    Ok(skill_dir)
 }
 
 /// Legacy (pre-V1) skill library: `~/.skills-manager/skills` (or the configured

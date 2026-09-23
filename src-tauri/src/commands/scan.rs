@@ -57,9 +57,12 @@ pub async fn scan_local_skills(
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let all_targets = store.get_all_targets().map_err(AppError::db)?;
-        let managed_paths: Vec<String> =
-            all_targets.iter().map(|t| t.target_path.clone()).collect();
         let managed_skills = store.get_all_skills().map_err(AppError::db)?;
+        let managed_paths: Vec<String> = all_targets
+            .iter()
+            .map(|t| t.target_path.clone())
+            .chain(managed_skills.iter().map(|s| s.central_path.clone()))
+            .collect();
 
         let adapters = tool_adapters::all_tool_adapters(&store);
         let mut plan = scanner::scan_local_skills_with_adapters(&managed_paths, &adapters)
@@ -69,11 +72,17 @@ pub async fn scan_local_skills(
             rec.imported_skill_id = match_imported_skill_id(rec, &managed_skills);
         }
 
-        // Clear and repopulate discovered
-        store.clear_discovered().map_err(AppError::db)?;
-        for rec in &plan.discovered {
-            store.insert_discovered(rec).map_err(AppError::db)?;
-        }
+        // Replace the discovered index under the same lock used by managed
+        // writes. This prevents a concurrent adopt from observing a half-filled
+        // scan result; filesystem scanning itself remains outside the lock.
+        sync_metadata::with_repo_lock("refresh discovered skills", || {
+            store.clear_discovered()?;
+            for rec in &plan.discovered {
+                store.insert_discovered(rec)?;
+            }
+            Ok::<(), anyhow::Error>(())
+        })
+        .map_err(AppError::db)?;
 
         let all_discovered = store.get_all_discovered().map_err(AppError::db)?;
         let groups = scanner::group_discovered(&all_discovered);
@@ -111,6 +120,10 @@ pub async fn import_existing_skill(
                 .get_skill_by_central_path(&dest.to_string_lossy())?
                 .is_some()
             {
+                // An already indexed skill is idempotent only when its managed
+                // directory still exists. A stale DB row must be reported,
+                // not silently treated as a successful import.
+                canonical::validate_existing_skill(&root, &dest)?;
                 return Ok(());
             }
 
@@ -164,30 +177,45 @@ pub async fn import_all_discovered(store: State<'_, Arc<SkillStore>>) -> Result<
                         .get_skill_by_central_path(&dest.to_string_lossy())?
                         .is_some()
                     {
+                        if let Err(err) = canonical::validate_existing_skill(&root, &dest) {
+                            log::warn!(
+                                "Skipping stale managed skill {} during import: {err}",
+                                dest.display()
+                            );
+                        }
                         continue;
                     }
 
-                    if let Ok(installed) = canonical::install_skill_dir_as(&path, &root, &clean, false)
+                    let installed = match canonical::install_skill_dir_as(&path, &root, &clean, false)
                     {
-                        let meta = skill_metadata::parse_skill_md(&installed);
-                        let hash = match content_hash::hash_directory(&installed) {
-                            Ok(h) => h,
-                            Err(_) => continue,
-                        };
+                        Ok(installed) => installed,
+                        Err(err) => {
+                            log::warn!("Could not adopt {}: {err}", path.display());
+                            continue;
+                        }
+                    };
+                    let meta = skill_metadata::parse_skill_md(&installed);
+                    let hash = match content_hash::hash_directory(&installed) {
+                        Ok(h) => h,
+                        Err(err) => {
+                            log::warn!("Could not hash adopted skill {}: {err}", installed.display());
+                            let _ = std::fs::remove_dir_all(&installed);
+                            continue;
+                        }
+                    };
 
-                        canonical::register_user_skill(
-                            &store,
-                            &UserSkillRegistration {
-                                name: clean,
-                                description: meta.description,
-                                central_path: installed,
-                                content_hash: hash,
-                                source_type: "import".to_string(),
-                                source_ref: Some(first.found_path.clone()),
-                            },
-                        )
-                        .map_err(anyhow::Error::from)?;
-                    }
+                    canonical::register_user_skill(
+                        &store,
+                        &UserSkillRegistration {
+                            name: clean,
+                            description: meta.description,
+                            central_path: installed,
+                            content_hash: hash,
+                            source_type: "import".to_string(),
+                            source_ref: Some(first.found_path.clone()),
+                        },
+                    )
+                    .map_err(anyhow::Error::from)?;
                 }
             }
 

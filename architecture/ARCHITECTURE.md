@@ -41,9 +41,9 @@ App metadata (SQLite, cache, logs) stays in `~/.skills-manager`. That is not a s
 
 | Area | How |
 |---|---|
-| Harness copy/symlink deploy | `sync_skill_to_tool`, `unsync_skill_from_tool`, `set_skill_tool_toggle` removed from the invoke handler; remaining writes that still name a harness path return `v1::blocked_write()` |
-| Preset apply to agents | `apply_preset_to_default`, `switch_preset`, `apply_preset_to_coding_agents` removed (P2.3); tray apply / schedule entries removed with them |
-| Project export to harness dirs | `export_skill_to_project`, `toggle_project_skill`, `delete_project_skill` write only under `<repo>/.agents/skills` (dest outside that root returns `v1::blocked_write`); CLI `skills deploy/undeploy/sync` and `presets apply/deactivate/deploy/undeploy` hard-block with `v1::POLICY_MESSAGE` |
+| Harness copy/symlink deploy | `sync_skill_to_tool`, `unsync_skill_from_tool`, `set_skill_tool_toggle` removed from the invoke handler; tool enable/disable and path changes now only update discovery configuration |
+| Preset apply to agents | `apply_preset_to_default`, `switch_preset`, `apply_preset_to_coding_agents` removed (P2.3); tray apply / schedule entries removed with them; Preset CRUD is metadata-only |
+| Project export to harness dirs | `export_skill_to_project`, `toggle_project_skill`, `delete_project_skill` write only under `<repo>/.agents/skills` (dest outside that root returns `v1::blocked_write`); linked workspace and project `skills-disabled` entry points are no longer exposed |
 | Delete harness-local skill | `delete_global_local_skill` returns `v1::blocked_write()` |
 | skills.sh marketplace UI | Install tab Market block removed (P2.1); CLI `skills search` / skillssh install remain |
 | Multi-device backup UI | Backup nav / Backup page removed (P2.1); git backup commands stay registered (Settings + FirstRun restore) |
@@ -51,7 +51,7 @@ App metadata (SQLite, cache, logs) stays in `~/.skills-manager`. That is not a s
 
 ## REMOVE later (not this round)
 
-Physical deletion of `sync_engine` harness deploy paths, presets disk-sync, marketplace client, and unused git backup surface. Do not delete until MCP inventory + `.agents` install are proven, or Git import / update tracking can break. P2 already removed: `commands/browse.rs`, `commands/sync.rs`, `apply_preset_from_tray` / tray schedule, `installer::install_from_git_dir`, and the dead `git_backup` / `scanner` / `tool_adapters` / `sync_metadata` / `agent_workspace` helpers that only those paths used. P2.6 closes the invariant: startup is preset-state only (no backfill spawn), project commands are canonical-only, and CLI deploy/sync paths are policy-blocked.
+Physical deletion of `sync_engine` harness deploy paths, presets disk-sync, marketplace client, and unused git backup surface. Do not delete until MCP inventory + `.agents` install are proven, or Git import / update tracking can break. P2 already removed: `commands/browse.rs`, `commands/sync.rs`, `apply_preset_from_tray` / tray schedule, `installer::install_from_git_dir`, and the dead `git_backup` / `scanner` / `tool_adapters` / `sync_metadata` / `agent_workspace` helpers that only those paths used. P2.6 closes the invariant: startup is preset-state only (no backfill spawn), project commands are canonical-only, and CLI deploy/sync paths are policy-blocked. V1.1 hardening additionally makes tool toggles/path edits discovery-only, removes linked-workspace creation, routes User deletion and skills.sh CLI installs through the canonical writer, and blocks updates when the live canonical hash was edited locally.
 
 ## V1 discovery allowlist
 

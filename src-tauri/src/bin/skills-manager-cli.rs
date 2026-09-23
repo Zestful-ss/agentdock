@@ -1643,11 +1643,25 @@ fn install_skillssh_action(
             cmd::resolve_skill_dir(&temp_dir, None, Some(&skill_id_field)).map_err(map_app_err)?;
         let revision = git_fetcher::get_head_revision(&temp_dir)?;
         let source_ref = format!("{}/{}", source, skill_id_field);
-        let (install_name, destination) =
+        let (install_name, _destination) =
             cmd::resolve_skillssh_install_target(store, &source_ref, &skill_id_field)
                 .map_err(map_app_err)?;
-        let install_result =
-            installer::install_skill_dir_to_destination(&skill_dir, &install_name, &destination)?;
+        let root = canonical::resolve_user_root().map_err(map_app_err)?;
+        let destination = canonical::install_skill_dir_as(
+            &skill_dir,
+            &root,
+            &install_name,
+            false,
+        )
+        .map_err(map_app_err)?;
+        let content_hash = content_hash::hash_directory(&destination)?;
+        let metadata = skill_metadata::parse_skill_md(&destination);
+        let install_result = installer::InstallResult {
+            name: install_name.clone(),
+            description: metadata.description,
+            central_path: destination,
+            content_hash,
+        };
         let metadata = cmd::InstallSourceMetadata {
             source_type: "skillssh".to_string(),
             source_ref: Some(source_ref),

@@ -375,16 +375,6 @@ export function MySkills() {
 
   const canDrag = !!viewedPreset;
 
-  const refreshGitStatus = useCallback(async () => {
-    try {
-      await api.gitBackupFetch().catch(() => {});
-      const status = await api.gitBackupStatus();
-      setGitStatus(status);
-    } catch {
-      // not critical
-    }
-  }, []);
-
   // Local-only status refresh: no `git fetch`, so it can fire from
   // dependency-driven effects without driving the file-watcher → refresh
   // → fetch feedback loop.
@@ -410,11 +400,11 @@ export function MySkills() {
 
   useEffect(() => {
     const handleWindowFocus = () => {
-      refreshGitStatus();
+      refreshGitStatusLocal();
     };
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
-        refreshGitStatus();
+        refreshGitStatusLocal();
       }
     };
 
@@ -424,7 +414,7 @@ export function MySkills() {
       window.removeEventListener("focus", handleWindowFocus);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [refreshGitStatus]);
+  }, [refreshGitStatusLocal]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {

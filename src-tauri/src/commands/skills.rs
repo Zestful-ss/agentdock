@@ -9,11 +9,11 @@ use walkdir::WalkDir;
 
 use crate::core::{
     audit_log::AuditDraft,
-    central_repo,
+    canonical, central_repo,
     error::AppError,
     git_fetcher,
     install_cancel::InstallCancelRegistry,
-    installer, path_guard,
+    installer, path_guard, paths,
     repo_lock::RepoLock,
     scanner,
     skill_metadata::{self, is_valid_skill_dir},
@@ -108,6 +108,23 @@ pub(crate) fn pending_removals_for(
         }
     }
     Ok(pending)
+}
+
+/// Refuse a replacement when the live canonical copy no longer matches the
+/// hash recorded in the index. The DB is an index; direct user edits must not
+/// be overwritten merely because the remote/source changed.
+fn ensure_live_skill_unchanged(skill: &SkillRecord) -> Result<(), AppError> {
+    let Some(recorded_hash) = skill.content_hash.as_deref() else {
+        return Ok(());
+    };
+    let live_hash = content_hash::hash_directory_strict(Path::new(&skill.central_path))
+        .map_err(AppError::io)?;
+    if recorded_hash != live_hash {
+        return Err(AppError::invalid_input(
+            "Managed skill was modified locally; replacement was not applied",
+        ));
+    }
+    Ok(())
 }
 
 /// A stable name for one exact set of removals at one exact revision.
@@ -742,25 +759,42 @@ pub fn delete_managed_skills_by_ids(
                 continue;
             };
 
-            // V1: delete only the canonical directory and the DB rows
-            // (skill + target records). Harness copies under target_path are
-            // observe-only and are never touched.
-            for target in store.get_targets_for_skill(skill_id)? {
-                store.delete_target(skill_id, &target.tool)?;
-            }
+            // Delete only after validating that the DB path is the canonical
+            // direct child of the User root. A missing, stale, symlinked, or
+            // out-of-root path is reported as a failed item; it must not be
+            // deleted and must not silently lose its index row.
+            let outcome = (|| -> Result<(), AppError> {
+                let resolved = canonical::resolve_user_root()?;
+                let central = PathBuf::from(&skill.central_path);
+                let name = central
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .ok_or_else(|| AppError::invalid_input("Invalid managed skill path"))?;
+                let expected = canonical::skill_dir(&resolved, name)?;
+                if !paths::same_path(&expected, &central) {
+                    return Err(AppError::invalid_input(
+                        "Managed skill path is outside the canonical User root",
+                    ));
+                }
+                canonical::validate_existing_skill(&resolved, &central)?;
+                let removed = canonical::delete_skill(&resolved, name)?;
+                canonical::remove_user_skill_records(store, &removed)?;
+                Ok(())
+            })();
 
-            let central = PathBuf::from(&skill.central_path);
-            if central.exists() {
-                std::fs::remove_dir_all(&central).ok();
+            match outcome {
+                Ok(()) => {
+                    deleted += 1;
+                }
+                Err(err) => {
+                    store.log_audit(
+                        AuditDraft::new("remove")
+                            .skill(skill_id.clone(), skill.name.clone())
+                            .fail(err.to_string()),
+                    );
+                    failed.push(skill_id.clone());
+                }
             }
-
-            store.delete_skill(skill_id)?;
-            store.log_audit(
-                AuditDraft::new("remove")
-                    .skill(skill_id.clone(), skill.name.clone())
-                    .ok(),
-            );
-            deleted += 1;
         }
 
         if deleted > 0 {
@@ -1800,6 +1834,7 @@ pub async fn relink_local_skill_source(
 
         let result = (|| -> Result<(Vec<PendingRemoval>, Option<String>), AppError> {
             let _lock = RepoLock::acquire_foreground("relink local skill").map_err(AppError::db)?;
+            ensure_live_skill_unchanged(&skill)?;
             let staged_path = staged_path_for(&skill.central_path);
             let install_result = installer::install_from_local_to_destination(
                 &path,
@@ -2047,11 +2082,19 @@ pub fn update_git_skill_internal(
             git_source.locator_skill_id.as_deref(),
         )?;
 
-        let new_hash =
-            crate::core::content_hash::hash_directory(&skill_dir).map_err(AppError::io)?;
+        let new_hash = crate::core::content_hash::hash_directory_strict(&skill_dir)
+            .map_err(AppError::io)?;
         let content_changed = skill.content_hash.as_deref() != Some(new_hash.as_str());
         let source_subpath = git_fetcher::relative_subpath(&temp_dir, &skill_dir);
         let _lock = RepoLock::acquire_foreground("update installed skill").map_err(AppError::db)?;
+
+        // The DB hash is an index value, not proof that the live managed copy
+        // is unchanged. Refuse to overwrite edits made directly in the
+        // canonical directory; the user must explicitly resolve that conflict
+        // instead of losing work during an update.
+        if content_changed {
+            ensure_live_skill_unchanged(&skill)?;
+        }
 
         // Stage first, then compare. The tree that lands in the library is the
         // installer's output, not the raw checkout — it drops `.git` and every
@@ -2303,8 +2346,8 @@ pub fn set_git_source_internal(
         let skill_dir = resolve_repoint_skill_dir(&temp_dir, subpath.as_deref())?;
         let resolved_subpath = git_fetcher::relative_subpath(&temp_dir, &skill_dir);
 
-        let new_hash =
-            crate::core::content_hash::hash_directory(&skill_dir).map_err(AppError::io)?;
+        let new_hash = crate::core::content_hash::hash_directory_strict(&skill_dir)
+            .map_err(AppError::io)?;
         let content_changed = skill.content_hash.as_deref() != Some(new_hash.as_str());
 
         // Report before refusing: inspecting a skill whose content differs is
@@ -2471,6 +2514,7 @@ pub fn reimport_local_skill_internal(
 
     let result = (|| -> Result<(Vec<PendingRemoval>, Option<String>), AppError> {
         let _lock = RepoLock::acquire_foreground("reimport local skill").map_err(AppError::db)?;
+        ensure_live_skill_unchanged(&skill)?;
         let staged_path = staged_path_for(&skill.central_path);
         let install_result =
             installer::install_from_local_to_destination(&path, Some(&skill.name), &staged_path)
@@ -3055,31 +3099,10 @@ pub fn resolve_skillssh_install_target(
         return Ok((existing.name, PathBuf::from(existing.central_path)));
     }
 
-    let base_name = skill_id.trim();
-    if base_name.is_empty() {
-        return Err(AppError::invalid_input("Skill id is empty"));
-    }
-
-    let mut attempt = 1;
-    loop {
-        let candidate_name = if attempt == 1 {
-            base_name.to_string()
-        } else {
-            format!("{base_name}-{attempt}")
-        };
-        let candidate_path = central_repo::skills_dir().join(&candidate_name);
-        let candidate_path_str = candidate_path.to_string_lossy().to_string();
-        let occupied = store
-            .get_skill_by_central_path(&candidate_path_str)
-            .map_err(AppError::db)?
-            .is_some();
-
-        if !occupied {
-            return Ok((candidate_name, candidate_path));
-        }
-
-        attempt += 1;
-    }
+    let name = canonical::sanitize_component(skill_id.trim())?;
+    let resolved = canonical::resolve_user_root()?;
+    let destination = canonical::skill_dir(&resolved, &name)?;
+    Ok((name, destination))
 }
 
 pub fn staged_path_for(central_path: &str) -> PathBuf {
@@ -3331,6 +3354,7 @@ mod tests {
 
     impl Drop for TestRepo {
         fn drop(&mut self) {
+            central_repo::set_runtime_skills_dir_override(None);
             central_repo::set_test_base_dir_override(None);
         }
     }
@@ -3340,7 +3364,9 @@ mod tests {
         let tmp = tempdir().unwrap();
         let base = tmp.path().join("repo");
         central_repo::set_test_base_dir_override(Some(base.clone()));
-        fs::create_dir_all(central_repo::skills_dir()).unwrap();
+        let skills_dir = central_repo::skills_dir();
+        fs::create_dir_all(&skills_dir).unwrap();
+        central_repo::set_runtime_skills_dir_override(Some(skills_dir));
         let store = SkillStore::new(&base.join("test.db")).unwrap();
         TestRepo {
             _lock: lock,
@@ -3439,6 +3465,26 @@ mod tests {
         assert!(sync_metadata::metadata_dir()
             .join("skills/skill-2.json")
             .exists());
+    }
+
+    #[test]
+    fn batch_delete_reports_a_missing_central_directory_without_dropping_the_index() {
+        let repo = test_repo();
+        let central = write_skill_dir("missing-skill");
+        fs::remove_dir_all(&central).unwrap();
+        repo.store
+            .insert_skill(&sample_skill("missing", "missing-skill", &central))
+            .unwrap();
+
+        let result = delete_managed_skills_by_ids(
+            &repo.store,
+            &["missing".to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(result.deleted, 0);
+        assert_eq!(result.failed, vec!["missing".to_string()]);
+        assert!(repo.store.get_skill_by_id("missing").unwrap().is_some());
     }
 
     /// V1 preflight covers only the canonical library. Harness copy targets

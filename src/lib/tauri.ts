@@ -743,13 +743,6 @@ export const getProjects = () => invoke<Project[]>("get_projects");
 export const addProject = (path: string) =>
   invoke<Project>("add_project", { path });
 
-export const addLinkedWorkspace = (name: string, path: string, disabledPath?: string) =>
-  invoke<Project>("add_linked_workspace", {
-    name,
-    path,
-    disabledPath: disabledPath ?? null,
-  });
-
 export const removeProject = (id: string) =>
   invoke<void>("remove_project", { id });
 

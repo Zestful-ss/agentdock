@@ -9,9 +9,11 @@ use crate::commands::projects::{
 };
 use crate::core::skill_store::{SkillRecord, SkillStore, SkillTargetRecord};
 use crate::core::{
-    content_hash, error::AppError, installer, project_scanner, scenario_service, sync_engine,
+    canonical, content_hash, error::AppError, project_scanner, skill_metadata, sync_metadata,
     tool_adapters, tool_service,
 };
+#[cfg(test)]
+use crate::core::{installer, scenario_service, sync_engine};
 
 fn adapter_for_agent(
     store: &SkillStore,
@@ -223,101 +225,36 @@ fn import_agent_local_skill_to_center(
     let adapter = adapter_for_agent(store, agent)?;
     let skill = find_agent_skill(&adapter, skill_relative_path)?;
 
-    let skills_root = adapter.skills_dir();
     let source_path = PathBuf::from(&skill.path);
-    ensure_agent_skill_path(&source_path, &skills_root)?;
+    ensure_agent_skill_path(&source_path, &adapter.skills_dir())?;
 
-    let all_managed = store.get_all_skills().unwrap_or_default();
-    let all_targets = store.get_all_targets().unwrap_or_default();
-    if let Some(existing) = find_verified_center_match(&skill, &all_managed, &all_targets) {
-        let result = installer::install_from_local_to_destination(
-            &source_path,
-            Some(&existing.name),
-            Path::new(&existing.central_path),
-        )
-        .map_err(AppError::io)?;
-        store
-            .update_skill_after_install(
-                &existing.id,
-                &existing.name,
-                result.description.as_deref(),
-                existing.source_revision.as_deref(),
-                existing.remote_revision.as_deref(),
-                Some(&result.content_hash),
-                "local_only",
-            )
-            .map_err(AppError::db)?;
-
-        let already_matched_by_ref = source_ref_matches_skill_path(
-            &skill.path,
-            std::fs::canonicalize(&skill.path).ok().as_ref(),
-            existing,
-        );
-        if existing.source_type == "local" && already_matched_by_ref {
-            store
-                .update_skill_source_ref(&existing.id, &skill.path)
-                .map_err(AppError::db)?;
-        }
-
-        // Register this agent as a managed sync target so the adopted skill is
-        // recognized as managed (gives it a delete button). Reusing the regular
-        // sync path keeps the target consistent with every other managed skill:
-        // sync_engine owns the on-disk artifact, so later unsync/scenario-sync
-        // touch only that managed artifact, never the user's source.
-        // AdoptExisting: the directory being replaced is the very one the user
-        // asked us to take over, and it has no target row yet (#363).
-        scenario_service::sync_single_skill_to_tool(
+    // A discovered harness skill may be adopted into the canonical User root,
+    // but it is never synchronized back to the harness. The whole User write
+    // is serialized with the SkillStore reconciliation under RepoLock.
+    sync_metadata::with_repo_lock("adopt agent-local skill", || {
+        let resolved = canonical::resolve_user_root()?;
+        let dest = canonical::install_skill_dir_as(&source_path, &resolved, &skill.name, false)?;
+        let hash = content_hash::hash_directory(&dest).map_err(AppError::io)?;
+        let metadata = skill_metadata::parse_skill_md(&dest);
+        let name = dest
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_else(|| skill.name.clone());
+        canonical::register_user_skill(
             store,
-            &existing.id,
-            agent,
-            scenario_service::DeployIntent::AdoptExisting,
-        )?;
-        return Ok(());
-    }
-
-    let result =
-        installer::install_from_local(&source_path, Some(&skill.name)).map_err(AppError::io)?;
-    let now = chrono::Utc::now().timestamp_millis();
-    let id = uuid::Uuid::new_v4().to_string();
-    let skill_record = SkillRecord {
-        id,
-        name: result.name.clone(),
-        description: result.description.clone(),
-        source_type: "local".to_string(),
-        source_ref: Some(skill.path.clone()),
-        source_ref_resolved: None,
-        source_subpath: None,
-        source_branch: None,
-        source_revision: None,
-        remote_revision: None,
-        central_path: result.central_path.to_string_lossy().to_string(),
-        content_hash: Some(result.content_hash.clone()),
-        enabled: true,
-        created_at: now,
-        updated_at: now,
-        status: "ok".to_string(),
-        update_status: "local_only".to_string(),
-        last_checked_at: Some(now),
-        last_check_error: None,
-    };
-
-    store.insert_skill(&skill_record).map_err(AppError::db)?;
-    // Register the managed sync target (see note above). On failure, drop the
-    // just-inserted skill row (which cascades to any target) so we never leave
-    // an orphaned, button-less skill behind. We deliberately do NOT delete the
-    // central directory: `install_from_local` may have de-duplicated onto a
-    // directory shared with another skill, and removing it could corrupt that
-    // skill — an orphaned dir is harmless by comparison.
-    if let Err(err) = scenario_service::sync_single_skill_to_tool(
-        store,
-        &skill_record.id,
-        agent,
-        scenario_service::DeployIntent::AdoptExisting,
-    ) {
-        let _ = store.delete_skill(&skill_record.id);
-        return Err(err);
-    }
-    Ok(())
+            &canonical::UserSkillRegistration {
+                name,
+                description: metadata.description,
+                central_path: dest,
+                content_hash: hash,
+                source_type: "adopted".to_string(),
+                source_ref: Some(source_path.display().to_string()),
+            },
+        )
+        .map_err(anyhow::Error::from)?;
+        Ok(())
+    })
+    .map_err(AppError::db)
 }
 
 /// Repair "stranded" center skills left behind by uploads that predate the
@@ -420,6 +357,7 @@ fn stranded_candidate_signature(
     Some(hex::encode(hasher.finalize()))
 }
 
+#[cfg(test)]
 pub fn backfill_stranded_agent_targets(store: &SkillStore) -> usize {
     let all_managed = store.get_all_skills().unwrap_or_default();
     let all_targets = store.get_all_targets().unwrap_or_default();
@@ -628,7 +566,10 @@ pub async fn delete_global_local_skill(
     Err(crate::core::v1::blocked_write())
 }
 
-#[cfg(test)]
+// Legacy harness-deployment regression tests are retained behind an explicit
+// feature until the historical target-row migration is complete. They must not
+// run in the V1 build, because V1 forbids Harness writes.
+#[cfg(all(test, feature = "legacy-harness-deploy-tests"))]
 mod tests {
     use super::{
         backfill_stranded_agent_targets, enrich_center_status,
@@ -1510,5 +1451,81 @@ mod tests {
         assert!(local_content.contains("agent newer"));
 
         central_repo::set_test_base_dir_override(None);
+    }
+}
+
+#[cfg(test)]
+mod canonical_adopt_tests {
+    use super::import_agent_local_skill_to_center;
+    use crate::core::central_repo;
+    use crate::core::skill_store::SkillStore;
+    use std::path::PathBuf;
+    use std::sync::MutexGuard;
+    use tempfile::TempDir;
+
+    struct Overrides {
+        _lock: MutexGuard<'static, ()>,
+        _tmp: TempDir,
+    }
+
+    impl Drop for Overrides {
+        fn drop(&mut self) {
+            central_repo::set_runtime_skills_dir_override(None);
+            central_repo::set_test_base_dir_override(None);
+        }
+    }
+
+    fn test_overrides() -> Overrides {
+        let lock = central_repo::test_base_dir_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("state");
+        std::fs::create_dir_all(&base).unwrap();
+        central_repo::set_test_base_dir_override(Some(base));
+        let user_root = tmp.path().join("user-skills");
+        central_repo::set_runtime_skills_dir_override(Some(user_root));
+        Overrides {
+            _lock: lock,
+            _tmp: tmp,
+        }
+    }
+
+    #[test]
+    fn adopting_a_discovered_skill_does_not_modify_the_source_or_create_targets() {
+        let overrides = test_overrides();
+        let source_root = overrides._tmp.path().join("harness-skills");
+        let source = source_root.join("local-tool");
+        std::fs::create_dir_all(&source).unwrap();
+        let source_file = source.join("SKILL.md");
+        std::fs::write(
+            &source_file,
+            "---\nname: local-tool\ndescription: Local test skill\n---\nlocal\n",
+        )
+        .unwrap();
+
+        let store = SkillStore::new(&overrides._tmp.path().join("store.db")).unwrap();
+        store
+            .set_setting(
+                "custom_tools",
+                &serde_json::json!([{
+                    "key": "test_agent",
+                    "display_name": "Test Agent",
+                    "skills_dir": source_root.to_string_lossy(),
+                }])
+                .to_string(),
+            )
+            .unwrap();
+
+        import_agent_local_skill_to_center(&store, "test_agent", "local-tool").unwrap();
+
+        assert!(source_file.exists());
+        assert!(std::fs::read_to_string(&source_file)
+            .unwrap()
+            .contains("local"));
+        assert!(store.get_all_targets().unwrap().is_empty());
+        let skills = store.get_all_skills().unwrap();
+        assert_eq!(skills.len(), 1);
+        assert!(PathBuf::from(&skills[0].central_path).starts_with(
+            overrides._tmp.path().join("user-skills")
+        ));
     }
 }

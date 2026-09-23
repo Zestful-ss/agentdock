@@ -1251,7 +1251,7 @@ pub fn relative_subpath(repo_dir: &Path, skill_dir: &Path) -> Option<String> {
     if relative.as_os_str().is_empty() {
         None
     } else {
-        Some(relative.to_string_lossy().to_string())
+        Some(relative.to_string_lossy().replace('\\', "/"))
     }
 }
 

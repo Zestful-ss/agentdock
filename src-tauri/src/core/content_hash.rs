@@ -154,6 +154,13 @@ pub fn hash_directory(dir: &Path) -> Result<String> {
     Ok(hash_entries(&list_content_files(dir)))
 }
 
+/// Hash a directory without silently omitting unreadable entries. Update and
+/// migration paths should use this variant so an incomplete read is reported
+/// as an error instead of looking like an unchanged skill.
+pub fn hash_directory_strict(dir: &Path) -> Result<String> {
+    Ok(hash_entries(&list_content_files_strict(dir)?))
+}
+
 /// True when `content` is text this may safely fold: valid UTF-8 with no NUL.
 ///
 /// Both halves are needed, and both are deliberately stricter than git's

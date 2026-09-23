@@ -799,7 +799,6 @@ pub fn run() {
             // Projects
             commands::projects::get_projects,
             commands::projects::add_project,
-            commands::projects::add_linked_workspace,
             commands::projects::remove_project,
             commands::projects::scan_projects,
             commands::projects::get_project_skills,

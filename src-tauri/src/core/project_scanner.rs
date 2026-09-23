@@ -42,7 +42,11 @@ pub struct ProjectSkillInfo {
     pub content_hash: Option<String>,
 }
 
-/// Read skills from all configured agents' project-level skill directories.
+/// Read the canonical project skill directory for the supplied configs.
+///
+/// V1 project inventory is deliberately non-recursive and has no
+/// `skills-disabled` sibling; linked-workspace discovery uses
+/// `read_linked_workspace_skills` separately.
 pub fn read_project_skills(
     project_path: &Path,
     agent_configs: &[AgentSkillConfig],
@@ -51,7 +55,6 @@ pub fn read_project_skills(
 
     for config in agent_configs {
         let skills_dir = project_path.join(&config.relative_skills_dir);
-        let disabled_dir = project_path.join(format!("{}-disabled", &config.relative_skills_dir));
 
         read_skills_from_dir(
             &skills_dir,
@@ -59,16 +62,10 @@ pub fn read_project_skills(
             &config.key,
             &config.display_name,
             &mut skills,
-            true,
-        );
-        read_skills_from_dir(
-            &disabled_dir,
             false,
-            &config.key,
-            &config.display_name,
-            &mut skills,
-            true,
         );
+        // V1 has no project `skills-disabled` layout. Only the canonical
+        // `<repo>/.agents/skills` directory is observable and writable.
     }
 
     skills.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
@@ -322,7 +319,7 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn reads_nested_project_skills_recursively() {
+    fn v1_project_scanner_ignores_nested_skill_directories() {
         let tmp = tempdir().unwrap();
         let root = tmp.path().join(".hermes").join("skills");
         let nested_skill = root.join("research").join("web-search");
@@ -340,10 +337,7 @@ mod tests {
         }];
 
         let skills = read_project_skills(tmp.path(), &configs);
-        assert_eq!(skills.len(), 1);
-        assert_eq!(skills[0].dir_name, "web-search");
-        assert_eq!(skills[0].relative_path, "research/web-search");
-        assert_eq!(skills[0].name, "Web Search");
+        assert!(skills.is_empty());
     }
 
     #[test]
@@ -363,8 +357,7 @@ mod tests {
         }];
 
         let skills = read_project_skills(tmp.path(), &configs);
-        assert_eq!(skills.len(), 1);
-        assert_eq!(skills[0].relative_path, "research/web-search");
+        assert!(skills.is_empty());
     }
 
     #[test]
