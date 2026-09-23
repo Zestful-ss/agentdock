@@ -1802,9 +1802,11 @@ mod tests {
             "central_path must point at the user root copy"
         );
         assert_eq!(record.source_type, "local");
+        let source_ref = record.source_ref.as_deref().unwrap_or_default();
         assert_eq!(
-            record.source_ref.as_deref(),
-            Some(skill_dir.to_string_lossy().as_ref())
+            crate::core::paths::identity_key(Path::new(source_ref)),
+            crate::core::paths::identity_key(&skill_dir),
+            "source_ref must point at the project skill"
         );
         assert!(record.content_hash.is_some());
     }
