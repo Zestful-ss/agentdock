@@ -1,6 +1,6 @@
 ---
 name: manage-skills
-description: Manage the user's shared agent-skill library via skills-manager-cli — install, update, remove, deploy or undeploy skills per agent, manage presets, organize tags, search, and adopt existing skills. Use this whenever the user wants Claude Code, Codex, Cursor, or another agent to gain or lose a skill, wants to organize the central library, or asks what is installed or deployed. Prefer this over direct agent-folder installs because Skills Manager preserves source metadata, preset membership, updates, and cross-agent deployment state.
+description: Manage the user's canonical agent-skill library (~/.agents/skills and <repo>/.agents/skills) via skills-manager-cli — install, update, remove, curate presets, organize tags, search, and adopt existing skills. Use this whenever the user wants a skill added or removed from the library, wants presets/tags organized, or asks what is installed. Harnesses are discovery sources only; do not write into harness-specific folders.
 ---
 
 ## Before doing anything
@@ -69,12 +69,14 @@ aside and retry. Never delete it for them.
 
 ## Mental model
 
-There's **one central library** at `~/.skills-manager/skills/` that all agents share. Each skill has source metadata, preset membership, tags, and zero or more real deployments in agent directories. A **preset** is a reusable group; several presets may be deployed at the same time.
+V1 writes skills only into the canonical roots — user `~/.agents/skills/` and project `<repo>/.agents/skills/` — not into harness-specific folders. Harnesses are discovery sources (Inventory / MCP observe them); they are not deployment targets. Each skill has source metadata, preset membership, tags, and a canonical location. A **preset** is a reusable curation group; several presets may be members at the same time.
 
 Keep these three states separate:
-- **Library**: install/remove controls whether Skills Manager owns the skill.
-- **Preset membership**: `presets add-skill/remove-skill` organizes the library only.
-- **Deployment**: `skills deploy/undeploy` and `presets deploy/undeploy` control what an agent can actually see.
+- **Library**: install/remove controls whether Skills Manager owns the skill under `.agents`.
+- **Preset membership**: `presets add-skill/remove-skill` organizes the library only (curation, not disk sync).
+- **Harness observation**: Inventory / agents list report what a harness already sees; they never write into harness dirs.
+
+CLI `skills deploy` / `presets deploy` still exist for compatibility, but V1 policy refuses harness-directory writes (`POLICY_MESSAGE`: canonical locations are `~/.agents/skills` and `<repo>/.agents/skills`). Prefer install into `.agents` and let native consumers pick skills up.
 
 Internally, presets are still stored as scenarios for backward-compatible Git Backup. The CLI and UI call them presets.
 
@@ -96,10 +98,11 @@ Internally, presets are still stored as scenarios for backward-compatible Git Ba
 "$SM" skills install ./looks-like/owner-repo --local
 ```
 
-**Default is library-only** — the skill enters the DB but doesn't appear in any agent yet. Prefer an explicit follow-up deployment so scope is unambiguous:
+**Default is library-only** — the skill enters the canonical library under `~/.agents/skills`. Native `.agents` consumers (Codex, OpenCode, DeepSeek Harness, Kimi, Pi) pick it up from there. Do not deploy into harness-specific folders in V1.
 
 ```bash
-"$SM" skills deploy <skill> --agent claude_code --agent codex
+# Optional compatibility path (may be refused by V1 policy for harness dirs)
+"$SM" skills deploy <skill> --agent claude_code
 ```
 
 `--sync` and `--sync-preset` remain legacy shortcuts for the exclusive active-preset workflow.
@@ -347,8 +350,7 @@ Report which skills actually refreshed (`refreshed: true` in the JSON) vs which 
 
 ## Pitfalls
 
-- **Install succeeded but skill doesn't appear in the agent** → install defaults to library-only. Use `skills deploy <skill> --agent <key>`.
-- **Preset membership changed but agent files did not** → membership is organization only. Follow with `presets deploy` or `skills deploy` when the user also asked to make it visible.
-- **No active preset** only affects legacy `skills sync` / `presets apply`; additive deploy commands do not require one.
-- **Adopted skills can't be `update`d from git** → `npx skills add` and manual `git clone` don't leave source metadata, so adopt has to treat them as `local`. Re-point them with `skills set-source`. Do **not** reach for `adopt --git-url` here: adopt only ever creates new library entries, and it fails *late* — `--dry-run` returns `ok: true` with the skill sitting in `skipped`, and only the real run errors with `--git-url requires exactly one adoptable skill, found 0`. Do **not** remove-then-reinstall either — that drops the skill id, and with it the tags, preset membership and every per-agent deployment.
-- Use `--dry-run` before bulk remove, tag delete, preset delete, deploy, or undeploy operations. Use `check` before `update`.
+- **Install succeeded but a non-native harness doesn't show it** → V1 only writes `.agents`; harnesses that do not read that root must be observed under Inventory, not written to. Prefer native consumers or ask the user to point their harness at `.agents/skills`.
+- **Preset membership changed but disk content did not** → membership is organization only. Installing into `.agents` is what makes content visible to native consumers.
+- **Adopted skills can't be `update`d from git** → `npx skills add` and manual `git clone` don't leave source metadata, so adopt has to treat them as `local`. Re-point them with `skills set-source`. Do **not** reach for `adopt --git-url` here: adopt only ever creates new library entries, and it fails *late* — `--dry-run` returns `ok: true` with the skill sitting in `skipped`, and only the real run errors with `--git-url requires exactly one adoptable skill, found 0`. Do **not** remove-then-reinstall either — that drops the skill id, and with it the tags and preset membership.
+- Use `--dry-run` before bulk remove, tag delete, or preset delete operations. Use `check` before `update`.

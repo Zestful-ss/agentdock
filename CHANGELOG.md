@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.41.0] - 2026-09-23
+
+### Release Overview
+- V1 cleanup (P2): harness deploy UI and market install path gone; install paths unified on the canonical `.agents` writer; dead tray/preset/sync code removed. Product line is **Manage `.agents`; observe Harnesses.**
+
+### User-facing
+- **Harness deployment UI removed** — Global Workspace / WorkspaceView, preset apply bar, batch sync-to-agent dialog, agent control setup card, and the Install Skills market block are gone. Skills install into user/project `.agents/skills`; harnesses are observed (Inventory), not written to.
+- **Backup nav/page UI removed** — Git backup commands remain (Settings + first-run restore); there is no sidebar Backup page in this cut.
+- **Preset is curation** — Preset membership organizes the library (`/my-skills` deep link); tray no longer offers apply-to-agents presets.
+
+### Developer & Governance
+- **Install unification (P2.2)** — App and CLI git/local install go through `confirm_git_install_inner` / `canonical::install_skill_dir*` (`replace=false` → `target_conflict`). CLI git install does not take RepoLock outside the inner path; scenario membership is fixed up after the lock is released.
+- **Dead code removal (P2.3)** — Deleted `commands/browse.rs`, `commands/sync.rs`, `apply_preset_from_tray` / tray schedule refresh, `installer::install_from_git_dir`, and unused helpers in `git_backup`, `scanner`, `tool_adapters`, `sync_metadata`, `agent_workspace`. Moved #363 shared-directory regression tests into `scenario_service`.
+- **Docs** — README tagline, ARCHITECTURE HIDE/REMOVE tables, and `manage-skills` mental model updated for the P2 surface. i18n dead-key scan: 509 keys, DEAD=0.
+
 ## [1.40.0] - 2026-09-17
 
 ### Release Overview

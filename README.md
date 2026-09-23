@@ -5,7 +5,7 @@
 <h1 align="center">Skills Manager</h1>
 
 <p align="center">
-  One app to manage AI agent skills across all your coding tools.
+  Manage <code>.agents</code>; observe Harnesses.
 </p>
 
 <p align="center">
@@ -38,20 +38,17 @@
   <img src="assets/demo/library.png" width="800" alt="Skills Manager Library" />
 </p>
 
-<p align="center"><strong>Install Skills — Marketplace</strong></p>
-<p align="center"><img src="assets/demo/install-skills.png" width="800" alt="Install Skills Marketplace" /></p>
+<p align="center"><strong>Install Skills</strong></p>
+<p align="center"><img src="assets/demo/install-skills.png" width="800" alt="Install Skills" /></p>
 
-<p align="center"><strong>Global Workspace</strong></p>
-<p align="center"><img src="assets/demo/global-workspace.png" width="800" alt="Global Workspace" /></p>
+<p align="center"><strong>My Skills (curation)</strong></p>
+<p align="center"><img src="assets/demo/library.png" width="800" alt="My Skills library" /></p>
 
-<p align="center"><strong>Agent Workspace</strong></p>
-<p align="center"><img src="assets/demo/agent-workspace.png" width="800" alt="Agent Workspace" /></p>
+<p align="center"><strong>Inventory (harness observation)</strong></p>
+<p align="center"><img src="assets/demo/global-workspace.png" width="800" alt="Inventory" /></p>
 
 <p align="center"><strong>Project Workspace</strong></p>
-<p align="center"><img src="assets/demo/project-workspace.png" width="800" alt="Project Workspace" /></p>
-
-<p align="center"><strong>Backup & Multi-Device Sync</strong></p>
-<p align="center"><img src="assets/demo/backup.png" width="800" alt="Backup and multi-device sync" /></p>
+<p align="center"><img src="assets/demo/project-workspace.png" width="800" alt="Project workspace" /></p>
 
 <p align="center"><strong>Settings</strong></p>
 <p align="center"><img src="assets/demo/settings.png" width="800" alt="Settings" /></p>
@@ -59,26 +56,23 @@
 ## Features
 
 <p align="center">
-  <img src="assets/diagram-concept-map.png" width="640" alt="Concept map: Library, Preset, Global Workspace, Project Workspace, Agent" />
+  <img src="assets/diagram-concept-map.png" width="640" alt="Concept map: Library, Preset, My Skills, Inventory, Project" />
 </p>
 
-- **Unified skill library** — Install skills from Git repos, local folders, `.zip` / `.skill` archives, or the [skills.sh](https://skills.sh) marketplace. Everything goes into one central repo, which defaults to `~/.skills-manager` and can be customized in **Settings**.
-- **Marketplace** — Browse popular skills from the marketplace and find them with keyword search.
-- **Your agents can manage skills** — Claude Code, Codex, Cursor and the rest can install a skill, deploy it to another agent, or report what is where, by driving Skills Manager instead of writing into an agent's folder behind its back — so sources, presets, update tracking and per-agent state stay intact. The Dashboard sets this up in one click; see [Let your agents manage skills](#let-your-agents-manage-skills).
-- **Presets** — Group skills into named presets. In any workspace, click a preset pill to instantly activate or deactivate all its skills for the current agent scope. Applying a preset is a one-time copy, not a live sync. The sidebar lists all presets for quick access.
-- **Global Workspace** — Each agent gets its own page listing every skill in its global folder — including ones installed outside Skills Manager — so the view always reflects what the agent actually sees. Add or remove skills per agent, or use the All Agents overview to manage every installed agent at once.
-- **Project Workspaces** — View and manage project-local skill folders for supported agents, compare them with your central library, and sync changes in either direction. Supports nested skill directories and per-agent assignment when exporting.
-- **Linked Workspaces** — Point to any directory as a skills root — useful for skills that live outside the default agent paths. Managed as a standalone workspace without participating in global preset sync.
-- **Multi-tool sync** — Sync skills to any supported tool via symlink or copy with a single click. Every skill card shows an agent icon badge per enabled agent — click a badge to install or remove that skill for that agent right from the card, with the badge reflecting live sync state.
-- **Add from Library sheet** — In any workspace, click **+ Add Skills** to open a unified picker: search your central library, toggle target agents with always-visible chips (with select-all/clear), and batch-add multiple skills in one click.
-- **Batch operations** — Multi-select skills for bulk enable/disable, export, or delete. Project Workspaces also support bulk enable/disable for project-local skills.
-- **Skill tagging and filters** — Tag skills, use tags to group similar skills, and filter by source or tag — including an **Untagged** pill to quickly find skills missing labels.
+- **Manage `.agents`; observe Harnesses** — Skills install only into the canonical roots (`~/.agents/skills`, `<repo>/.agents/skills`). Harnesses (Claude Code, Codex, Cursor, …) are discovery sources shown under **Inventory**; the app does not deploy into harness-specific folders.
+- **Unified skill library** — Install skills from Git repos, local folders, or `.zip` / `.skill` archives into the canonical library. Metadata (SQLite, cache, logs) stays under `~/.skills-manager`.
+- **My Skills** — Browse and curate the library; organize **presets** (curation groups) with membership toggles and ordering. Preset membership does not write harness files.
+- **Inventory** — Read-only view of what each harness already discovers (skills + MCP), including native `.agents` consumers.
+- **Project workspaces** — Manage project-local skills under `<repo>/.agents/skills`, compare with the user library, and import/export in either direction.
+- **Add from Library sheet** — Open **+ Add Skills** to search the library and batch-add skills.
+- **Batch operations** — Multi-select skills for bulk enable/disable, export, or delete where the surface still allows it.
+- **Skill tagging and filters** — Tag skills, group by source or tag, and find untagged ones quickly.
 - **Update tracking** — Check for upstream updates on Git-based skills; re-import local ones.
 - **Skill preview and source inspection** — Read `SKILL.md` / `README.md`, inspect source metadata, and compare local content with the upstream version inside the app.
-- **Custom tools** — Add your own agents/tools with custom skills directories, or override the default path for any built-in tool.
-- **Backup & multi-device sync** — Connect a private GitHub repository with one sign-in (or any Git remote), and the app backs your library up automatically and keeps all connected devices in sync. Merges are skill-aware — a rename on one machine combines cleanly with an edit on another — and true conflicts never block: your local version stays put until you choose keep mine / use remote / keep both. Snapshot versions are restorable at any time.
-- **Activity log & Export Logs** — Install / remove / update / sync operations are recorded locally. Use **Settings → Export Logs** to bundle recent logs and activity history into a single zip for easier issue reports.
-- **Flexible app settings** — Configure repo path, sync mode, theme, text size, language, tray behavior, proxy, Git remote, update checks, and the order agents appear throughout the app — all in one place.
+- **Custom tools** — Register custom agents/tools for discovery paths, or override a built-in path for observation.
+- **Backup commands (Settings / first-run)** — Git remote helpers remain for multi-device sync of the library; there is no sidebar Backup page in this cut.
+- **Activity log & Export Logs** — Install / remove / update operations are recorded locally. Use **Settings → Export Logs** to bundle recent logs and activity history into a single zip for easier issue reports.
+- **Flexible app settings** — Configure repo path, theme, text size, language, tray behavior, proxy, Git remote, update checks, and harness order — all in one place.
 - **In-app updates** — The app tells you when a new version is out and installs it for you on macOS and Windows. Nothing downloads or installs on its own: checking only notifies, and installing and restarting each take a click.
 
 ## Install
@@ -101,18 +95,16 @@ Every installer ships the CLI inside the app — see [Where the binary lives](#w
 
 ## Quick Start
 
-1. Install skills from local folders, Git repositories, archives, or the marketplace.
-2. Open **Global Workspace** from the sidebar and pick an agent (e.g. Claude Code).
-3. Click a **Preset** pill to activate its skills for that agent, or use **+ Add Skills** to pick from your library and toggle target agents inline. Active presets show a ✓; partial installs show a count badge.
-4. To manage project-local skills, open a **Project Workspace** and use the same preset pills or the **+ Add Skills** picker with its multi-agent target selector.
-5. Configure agent paths, custom tools, theme, language, proxy, and Git preferences in **Settings**.
-6. If you want history or multi-machine sync, open **Backup** in the sidebar and click **Sign in with GitHub** — backup and cross-device sync run automatically from then on.
+1. Install skills from local folders, Git repositories, or archives — they land in `~/.agents/skills` (user) or `<repo>/.agents/skills` (project).
+2. Open **My Skills** to curate the library and organize presets (membership only).
+3. Open **Inventory** to see what each harness already discovers (read-only).
+4. For project-local skills, open a **Project** and manage `.agents/skills` there.
+5. Configure discovery paths, theme, language, proxy, and Git preferences in **Settings**.
+6. Multi-device library sync still uses Git helpers under Settings / first-run restore (no sidebar Backup page in this cut).
 
 ## Let your agents manage skills
 
-Claude Code, Codex, Cursor and the rest can install a skill, deploy it to another agent, or report what is where — by driving Skills Manager rather than writing into an agent's folder behind its back. That is what keeps source metadata, preset membership, update tracking and cross-agent deployment state intact.
-
-The Dashboard offers a one-time setup: pick the agents that should be able to do it, and the app installs the [`manage-skills`](skills/manage-skills/SKILL.md) skill and deploys it to exactly those. Afterwards it is an ordinary library skill — adding or removing an agent is the agent badge row on its own card. No PATH setup is involved: the app publishes a copy of its CLI where agents look for it.
+Claude Code, Codex, Cursor and the rest can drive Skills Manager through the [`manage-skills`](skills/manage-skills/SKILL.md) skill / CLI — install and curate the canonical library rather than writing into an agent folder behind its back. That keeps source metadata, preset membership, and update tracking intact.
 
 It is also an ordinary published skill, so it can be installed without the app:
 
@@ -120,38 +112,23 @@ It is also an ordinary published skill, so it can be installed without the app:
 npx skills add xingkongliang/skills-manager
 ```
 
-## Backup & Multi-Device Sync
+## Multi-device library sync (commands)
 
-The **Backup** page (sidebar) keeps your skill library versioned in a Git repository. One device gets versioned backup with restorable snapshots; several devices connected to the same repository stay in sync with each other automatically. The remote stays a plain Git repository — you can `git clone` it anywhere, no lock-in.
+Git backup helpers still version the skill library. There is no sidebar Backup page in this cut — connect and restore from **Settings → Git Sync Configuration** and the first-run restore dialog.
 
-### Connect
+- **Sign in with GitHub** or paste any Git URL (HTTPS + PAT, SSH, self-hosted). Tokens live in the OS keychain when connected through the app.
+- **Merging** is skill-aware (rename on one machine combines with an edit on another); true conflicts keep the local copy until you resolve them.
+- Secrets and machine-specific wiring never leave the machine. The SQLite database is not in Git — metadata is rebuilt from skill files.
 
-- **Sign in with GitHub** (recommended): an 8-digit device-flow sign-in creates a private `skills-manager-backup` repository for you. The token is stored in the OS keychain — never in files or the repo config.
-- **Advanced**: paste any Git URL (HTTPS + PAT, SSH, self-hosted) under **Settings → Git Sync Configuration**.
-- On a new machine with an empty library, the first launch asks: **start fresh, or restore from a backup?**
+## Observed harnesses
 
-### How syncing works
+V1 discovery allowlist (Inventory / MCP observe these; the app does not write harness-specific skill dirs):
 
-- **Automatic**: local changes are committed and pushed in the background a couple of minutes after you stop editing; updates pushed by your other devices are merged in and pushed back automatically. **Back Up Now** is always available for an immediate run, and every backup in the history shows which device made it.
-- **Skill-aware merging**: changes are merged per skill, not per text line — renaming a skill on one machine combines cleanly with editing its content on another.
-- **Conflicts never block or overwrite**: if the same skill was edited on two devices at once, everything else syncs normally while that skill keeps your local version and appears under **Needs attention** (also badged on its card in the Library). Pick **keep mine / use remote / keep both** — a safety snapshot is taken before any choice is applied, so every decision is undoable.
-- **Snapshots & restore**: manual backups create snapshot versions; open the Backup page history to restore any of them. A restore first saves the current state as its own snapshot.
+Claude Code · Codex · OpenCode · DeepSeek Harness · Kimi · Grok · Pi · Antigravity · Maka · OpenChamber
 
-### What's included
+Native `.agents` consumers that pick up `~/.agents/skills` / `<repo>/.agents/skills` without a harness-specific deploy: Codex · OpenCode · DeepSeek Harness · Kimi · Pi.
 
-Skills, tags, presets, and per-agent skill toggles are backed up. Secrets (API keys, tokens, proxy settings) and machine-specific wiring never leave the machine. Skills over 100 MB stay local and are excluded from backup automatically (labeled on the Backup page). The SQLite database is not in Git — it stores metadata that is rebuilt from the skill files.
-
-### Disconnecting
-
-The Backup page offers three levels: **disconnect this machine** (other devices and remote data untouched), **revoke the GitHub authorization**, or **delete the remote backup** entirely (routed through GitHub's own type-the-name confirmation).
-
-## Supported Tools
-
-54 agents are supported out of the box, including:
-
-Claude Code · Codex · Cursor · GitHub Copilot · Gemini CLI · GitLab Duo · OpenCode · OpenClaw · Hermes Agent · OpenHands · Cline · Goose · Windsurf · Continue · Grok · Antigravity · Qwen Code · ZCode · Crush · Kilo Code · Roo Code · Amp · Kiro CLI · Droid · TRAE IDE · Warp · Qoder · CodeBuddy
-
-**Settings** lists them all, leading with the ones detected on your machine. You can also add custom tools there and manage their skills the same way.
+**Settings** still lists harness paths for observation and custom discovery roots.
 
 ## Tech Stack
 
