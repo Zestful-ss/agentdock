@@ -5,9 +5,10 @@ use std::sync::Arc;
 use anyhow::{Context, anyhow, bail};
 use app_lib::commands::{presets as preset_cmd, skills as cmd, tools as tool_cmd};
 use app_lib::core::{
-    app_state, audit_log::AuditDraft, central_repo, error::AppError, git_backup, git_fetcher,
-    installer, merge, repo_lock::RepoLock, scenario_service, skill_metadata,
-    skill_store::SkillStore, skillssh_api, sync_engine, sync_metadata, tool_adapters, tool_service,
+    app_state, audit_log::AuditDraft, canonical, central_repo, content_hash, error::AppError,
+    git_backup, git_fetcher, installer, merge, repo_lock::RepoLock, scenario_service,
+    skill_metadata, skill_store::SkillStore, skillssh_api, sync_engine, sync_metadata,
+    tool_adapters, tool_service,
 };
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
@@ -114,12 +115,6 @@ enum SkillsCommand {
         skillssh: bool,
         #[arg(long)]
         name: Option<String>,
-        /// Add to current active preset and sync agents
-        #[arg(long, conflicts_with = "sync_preset")]
-        sync: bool,
-        /// Add to given preset (by id or name) and sync agents
-        #[arg(long, alias = "sync-scenario", value_name = "REF")]
-        sync_preset: Option<String>,
     },
     Update {
         /// Skill ref (id / name / dir basename / central path). Omit for --all.
@@ -141,15 +136,16 @@ enum SkillsCommand {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Deprecated compatibility command: use skills deploy.
+    /// Deprecated: V1 harnesses are observe-only; this always refuses.
     Enable {
         references: Vec<String>,
     },
-    /// Deprecated compatibility command: use skills undeploy.
+    /// Deprecated: V1 harnesses are observe-only; this always refuses.
     Disable {
         references: Vec<String>,
     },
-    /// Deploy library skills to one or more agents' global skill directories.
+    /// Deprecated: V1 refuses harness writes. Canonical locations are
+    /// ~/.agents/skills and <repo>/.agents/skills.
     Deploy {
         #[arg(required = true)]
         references: Vec<String>,
@@ -158,7 +154,8 @@ enum SkillsCommand {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Remove managed deployments from one or more agents.
+    /// Deprecated: V1 refuses harness writes. Canonical locations are
+    /// ~/.agents/skills and <repo>/.agents/skills.
     Undeploy {
         #[arg(required = true)]
         references: Vec<String>,
@@ -171,6 +168,8 @@ enum SkillsCommand {
     Status {
         reference: String,
     },
+    /// Deprecated: V1 refuses harness writes. Canonical locations are
+    /// ~/.agents/skills and <repo>/.agents/skills.
     Sync {
         /// Preset id or name (default = current active preset)
         #[arg(long, alias = "scenario")]
@@ -301,15 +300,18 @@ enum PresetCommand {
     Preview {
         reference: String,
     },
-    /// Legacy exclusive switch: replaces the current active preset.
+    /// Deprecated: V1 refuses harness writes. Canonical locations are
+    /// ~/.agents/skills and <repo>/.agents/skills.
     Apply {
         reference: String,
     },
-    /// Legacy exclusive close operation. Prefer undeploy for additive presets.
+    /// Deprecated: V1 refuses harness writes. Canonical locations are
+    /// ~/.agents/skills and <repo>/.agents/skills.
     Deactivate {
         reference: String,
     },
-    /// Additively deploy this preset without removing other deployed presets.
+    /// Deprecated: V1 refuses harness writes. Canonical locations are
+    /// ~/.agents/skills and <repo>/.agents/skills.
     #[command(alias = "activate", alias = "enable", alias = "start", alias = "open")]
     Deploy {
         reference: String,
@@ -318,7 +320,8 @@ enum PresetCommand {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Remove this preset's deployed pairs without changing its membership.
+    /// Deprecated: V1 refuses harness writes. Canonical locations are
+    /// ~/.agents/skills and <repo>/.agents/skills.
     #[command(alias = "disable", alias = "stop", alias = "close", alias = "off")]
     Undeploy {
         reference: String,
@@ -576,16 +579,6 @@ struct SyncReport {
 }
 
 #[derive(Debug, Serialize)]
-struct PresetDeactivateReport {
-    ok: bool,
-    preset_id: String,
-    preset_name: String,
-    removed_target_count: usize,
-    active_preset_id: Option<String>,
-    active_preset_name: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
 struct SearchHit {
     install_ref: String,
     name: String,
@@ -641,12 +634,6 @@ enum InstallKind {
     Local,
     Git,
     Skillssh,
-}
-
-enum SyncTarget {
-    None,
-    Active,
-    Specific(String),
 }
 
 fn main() {
@@ -838,18 +825,9 @@ fn run_skills(args: SkillsArgs, store: &SkillStore, json: bool) -> anyhow::Resul
             git,
             skillssh,
             name,
-            sync,
-            sync_preset,
         } => {
             let kind = classify_ref(&reference, local, git, skillssh)?;
-            let sync_target = if let Some(ref s) = sync_preset {
-                SyncTarget::Specific(s.clone())
-            } else if sync {
-                SyncTarget::Active
-            } else {
-                SyncTarget::None
-            };
-            let report = run_install(store, &reference, name.as_deref(), kind, sync_target)?;
+            let report = run_install(store, &reference, name.as_deref(), kind)?;
             print_json(&report, json);
         }
         SkillsCommand::Update { reference, all } => {
@@ -880,32 +858,11 @@ fn run_skills(args: SkillsArgs, store: &SkillStore, json: bool) -> anyhow::Resul
             let reports = run_deprecated_set_enabled(store, &references, false)?;
             print_json(&reports, json);
         }
-        SkillsCommand::Deploy {
-            references,
-            agents,
-            dry_run,
-        } => {
-            let report = run_skill_deployment(store, &references, &agents, true, dry_run)?;
-            print_json(&report, json);
-        }
-        SkillsCommand::Undeploy {
-            references,
-            agents,
-            dry_run,
-        } => {
-            let report = run_skill_deployment(store, &references, &agents, false, dry_run)?;
-            print_json(&report, json);
+        SkillsCommand::Deploy { .. } | SkillsCommand::Undeploy { .. } | SkillsCommand::Sync { .. } => {
+            bail!(app_lib::core::v1::POLICY_MESSAGE);
         }
         SkillsCommand::Status { reference } => {
             print_json(&skill_status(store, &reference)?, json);
-        }
-        SkillsCommand::Sync {
-            preset,
-            tool,
-            dry_run,
-        } => {
-            let report = run_sync(store, preset.as_deref(), tool.as_deref(), dry_run)?;
-            print_json(&report, json);
         }
         SkillsCommand::Search { query, limit } => {
             let hits = run_search(store, &query, limit)?;
@@ -1150,6 +1107,10 @@ fn resolve_skill_references(
     Ok(skills)
 }
 
+// V1: deploy/undeploy/sync are hard-blocked at the command dispatch with the
+// policy message. These helpers remain only so unit tests can still exercise
+// the lower-level pairing logic; nothing in the live CLI path calls them.
+#[allow(dead_code)]
 fn run_skill_deployment(
     store: &SkillStore,
     references: &[String],
@@ -1250,6 +1211,7 @@ fn run_skill_deployment(
     })
 }
 
+#[allow(dead_code)]
 fn verify_deployment_state(
     store: &SkillStore,
     skill_ids: &[String],
@@ -1481,31 +1443,19 @@ fn is_skillssh_shorthand(s: &str) -> bool {
     (parts.len() == 2 || parts.len() == 3) && parts.iter().all(|p| seg_ok(p))
 }
 
-fn resolve_sync_target(store: &SkillStore, target: &SyncTarget) -> anyhow::Result<Option<String>> {
-    match target {
-        SyncTarget::None => Ok(None),
-        SyncTarget::Active => Ok(store.get_active_scenario_id()?),
-        SyncTarget::Specific(ref_) => {
-            let scenario = resolve_scenario(store, ref_)?;
-            Ok(Some(scenario.id))
-        }
-    }
-}
-
 fn run_install(
     store: &SkillStore,
     reference: &str,
     name: Option<&str>,
     kind: InstallKind,
-    sync: SyncTarget,
 ) -> anyhow::Result<InstallReport> {
-    let preset_id = resolve_sync_target(store, &sync)?;
-    let synced = preset_id.is_some();
-
+    // V1: install writes the canonical library only. It never joins an
+    // active preset and never syncs harness directories (`--sync` /
+    // `--sync-preset` were retired with the invariant closure).
     let (skill_id, install_name, central_path, source_type) = match kind {
-        InstallKind::Local => install_local_action(store, reference, name, preset_id.as_deref())?,
-        InstallKind::Git => install_git_action(store, reference, name, preset_id.as_deref())?,
-        InstallKind::Skillssh => install_skillssh_action(store, reference, preset_id.as_deref())?,
+        InstallKind::Local => install_local_action(store, reference, name, None)?,
+        InstallKind::Git => install_git_action(store, reference, name, None)?,
+        InstallKind::Skillssh => install_skillssh_action(store, reference, None)?,
     };
 
     Ok(InstallReport {
@@ -1514,8 +1464,8 @@ fn run_install(
         name: install_name,
         central_path,
         source_type,
-        synced,
-        preset_id,
+        synced: false,
+        preset_id: None,
     })
 }
 
@@ -1531,7 +1481,30 @@ fn install_local_action(
     }
 
     let _lock = RepoLock::acquire_foreground("cli install local")?;
-    let result = installer::install_from_local(&path, name)?;
+    let resolved = canonical::resolve_user_root().map_err(map_app_err)?;
+    let prepared = installer::prepare_local_source(&path).map_err(|e| anyhow!("{e}"))?;
+    let dest = match name.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(n) => {
+            let clean = canonical::sanitize_component(n).map_err(map_app_err)?;
+            canonical::install_skill_dir_as(prepared.skill_dir(), &resolved, &clean, false)
+                .map_err(map_app_err)?
+        }
+        None => canonical::install_skill_dir(prepared.skill_dir(), &resolved, false)
+            .map_err(map_app_err)?,
+    };
+    let install_name = dest
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let meta = skill_metadata::parse_skill_md(&dest);
+    let hash = content_hash::hash_directory(&dest)?;
+    let central_path = dest.to_string_lossy().to_string();
+    let result = installer::InstallResult {
+        name: install_name.clone(),
+        description: meta.description,
+        central_path: dest,
+        content_hash: hash,
+    };
     let metadata = cmd::InstallSourceMetadata {
         source_type: "local".to_string(),
         source_ref: Some(path.to_string_lossy().to_string()),
@@ -1542,8 +1515,6 @@ fn install_local_action(
         remote_revision: None,
         update_status: "local_only".to_string(),
     };
-    let central_path = result.central_path.to_string_lossy().to_string();
-    let install_name = result.name.clone();
     let skill_id = cmd::store_installed_skill_unlocked(store, &result, &metadata, active_scenario)
         .map_err(map_app_err)?;
     Ok((skill_id, install_name, central_path, "local".to_string()))
@@ -1568,27 +1539,87 @@ fn install_git_action(
         None,
     )?;
     let result = (|| -> anyhow::Result<(String, String, String)> {
-        let _lock = RepoLock::acquire_foreground("cli install git")?;
         let skill_dir = cmd::resolve_skill_dir(&temp_dir, parsed.subpath.as_deref(), None)
             .map_err(map_app_err)?;
-        let revision = git_fetcher::get_head_revision(&temp_dir)?;
-        let install_result = installer::install_from_git_dir(&skill_dir, name)?;
-        let metadata = cmd::InstallSourceMetadata {
-            source_type: "git".to_string(),
-            source_ref: Some(parsed.original_url.clone()),
-            source_ref_resolved: Some(parsed.clone_url.clone()),
-            source_subpath: git_fetcher::relative_subpath(&temp_dir, &skill_dir),
-            source_branch: parsed.branch.clone(),
-            source_revision: Some(revision.clone()),
-            remote_revision: Some(revision),
-            update_status: "up_to_date".to_string(),
-        };
-        let central_path = install_result.central_path.to_string_lossy().to_string();
-        let install_name = install_result.name.clone();
-        let skill_id =
-            cmd::store_installed_skill_unlocked(store, &install_result, &metadata, active_scenario)
-                .map_err(map_app_err)?;
-        Ok((skill_id, install_name, central_path))
+        let dirs = cmd::collect_git_skill_dirs(&skill_dir);
+        if dirs.is_empty() {
+            bail!("no skills found in repository");
+        }
+        let single = dirs.len() == 1;
+        let items: Vec<cmd::SkillInstallItem> = dirs
+            .iter()
+            .map(|d| {
+                let rel_path = cmd::skill_rel_key(&skill_dir, d);
+                let meta = skill_metadata::parse_skill_md(d);
+                let default_name = meta
+                    .name
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or_else(|| {
+                        d.file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| rel_path.clone())
+                    });
+                let final_name = if single {
+                    name.unwrap_or(&default_name).to_string()
+                } else {
+                    default_name
+                };
+                cmd::SkillInstallItem {
+                    rel_path,
+                    name: final_name,
+                }
+            })
+            .collect();
+
+        let outcomes = cmd::confirm_git_install_inner(
+            store,
+            repo_url,
+            &temp_dir,
+            &items,
+            "user",
+            None,
+            false,
+            proxy_url.as_deref(),
+        )
+        .map_err(map_app_err)?;
+
+        let installed: Vec<_> = outcomes
+            .iter()
+            .filter(|o| o.status == "installed")
+            .collect();
+        let failed: Vec<_> = outcomes
+            .iter()
+            .filter(|o| o.status != "installed")
+            .collect();
+        if !failed.is_empty() {
+            let details: Vec<String> = failed
+                .iter()
+                .map(|o| {
+                    o.error
+                        .clone()
+                        .unwrap_or_else(|| format!("{}: {}", o.name, o.status))
+                })
+                .collect();
+            bail!("git install failed: {}", details.join("; "));
+        }
+        let first = installed
+            .first()
+            .ok_or_else(|| anyhow!("git install produced no outcomes"))?;
+        let dest_path = first
+            .dest_path
+            .clone()
+            .ok_or_else(|| anyhow!("git install missing destination path"))?;
+
+        let record = store
+            .get_skill_by_central_path(&dest_path)?
+            .ok_or_else(|| anyhow!("installed skill not found in index: {dest_path}"))?;
+
+        if let Some(scenario_id) = active_scenario {
+            // V1: membership only; harness directories are never synced from install.
+            store.add_skill_to_scenario(scenario_id, &record.id)?;
+        }
+
+        Ok((record.id, first.name.clone(), dest_path))
     })();
     git_fetcher::cleanup_temp(&temp_dir);
     let (skill_id, install_name, central_path) = result?;
@@ -1885,9 +1916,9 @@ fn run_deprecated_set_enabled(
             skill.enabled
         };
         let message = if requested_enabled {
-            "Deprecated compatibility command: use `skills deploy --agent <key>` to make a skill available to an agent."
+            "Deprecated: V1 harnesses are observe-only; canonical skills live under ~/.agents/skills."
         } else {
-            "Deprecated compatibility command: use `skills undeploy --agent <key>` to remove a skill from an agent."
+            "Deprecated: V1 harnesses are observe-only; removals go through the canonical library."
         };
         reports.push(DeprecatedEnableReport {
             skill_id: skill.id,
@@ -1906,6 +1937,7 @@ fn run_deprecated_set_enabled(
 
 // ── sync ──────────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 fn run_sync(
     store: &SkillStore,
     preset_ref: Option<&str>,
@@ -2458,80 +2490,11 @@ fn run_presets(args: PresetArgs, store: &SkillStore, json: bool) -> anyhow::Resu
                 scenario_service::preview_scenario_sync(store, &preset.id).map_err(map_app_err)?;
             print_json(&preview, json);
         }
-        PresetCommand::Apply { reference } => {
-            let preset = resolve_scenario(store, &reference)?;
-            let refusals = scenario_service::apply_scenario_to_default(store, &preset.id)
-                .map_err(map_app_err)?;
-            scenario_service::refusals_to_error(refusals).map_err(map_app_err)?;
-            print_json(&current_preset(store)?, json);
-        }
-        PresetCommand::Deactivate { reference } => {
-            let preset = resolve_scenario(store, &reference)?;
-            let active = store.get_active_scenario_id()?;
-            let is_active = active.as_deref() == Some(preset.id.as_str());
-            let count_before = count_synced_targets_for_preset(store, &preset.id)?;
-
-            if is_active {
-                let next_active = replacement_preset_after_deactivate(store, &preset.id)?;
-                if let Some(next) = next_active.as_ref() {
-                    for refusal in scenario_service::apply_scenario_to_default(store, &next.id)
-                        .map_err(map_app_err)?
-                    {
-                        eprintln!("warning: {refusal}");
-                    }
-                } else {
-                    scenario_service::unsync_scenario_skills(store, &preset.id)
-                        .map_err(map_app_err)?;
-                    store.clear_active_scenario()?;
-                }
-            } else {
-                // Closing a non-active preset still tears down sync targets for
-                // any skills it shares with the active preset. Unsync this
-                // preset first, then re-sync the active preset so the shared
-                // targets are restored.
-                scenario_service::unsync_scenario_skills(store, &preset.id).map_err(map_app_err)?;
-                if let Some(active_id) = active.as_deref() {
-                    // The delete already happened; a refusal here must not fail
-                    // the command, only be reported.
-                    for refusal in scenario_service::sync_scenario_skills(store, active_id)
-                        .map_err(map_app_err)?
-                    {
-                        eprintln!("warning: {refusal}");
-                    }
-                }
-            }
-
-            let count_after = count_synced_targets_for_preset(store, &preset.id)?;
-            let removed_target_count = count_before.saturating_sub(count_after);
-
-            let active_after = current_preset(store)?;
-            print_json(
-                &PresetDeactivateReport {
-                    ok: true,
-                    preset_id: preset.id,
-                    preset_name: preset.name,
-                    removed_target_count,
-                    active_preset_id: active_after.as_ref().map(|preset| preset.id.clone()),
-                    active_preset_name: active_after.map(|preset| preset.name),
-                },
-                json,
-            );
-        }
-        PresetCommand::Deploy {
-            reference,
-            agents,
-            dry_run,
-        } => {
-            let report = run_preset_deployment(store, &reference, &agents, true, dry_run)?;
-            print_json(&report, json);
-        }
-        PresetCommand::Undeploy {
-            reference,
-            agents,
-            dry_run,
-        } => {
-            let report = run_preset_deployment(store, &reference, &agents, false, dry_run)?;
-            print_json(&report, json);
+        PresetCommand::Apply { .. }
+        | PresetCommand::Deactivate { .. }
+        | PresetCommand::Deploy { .. }
+        | PresetCommand::Undeploy { .. } => {
+            bail!(app_lib::core::v1::POLICY_MESSAGE);
         }
         PresetCommand::Status { reference, agents } => {
             print_json(&preset_status(store, &reference, &agents)?, json);
@@ -2736,6 +2699,7 @@ fn preset_status(
     })
 }
 
+#[allow(dead_code)]
 fn run_preset_deployment(
     store: &SkillStore,
     reference: &str,
@@ -2870,6 +2834,7 @@ fn current_preset(store: &SkillStore) -> anyhow::Result<Option<PresetInfo>> {
     Ok(scenarios.into_iter().find(|s| s.active))
 }
 
+#[allow(dead_code)]
 fn count_synced_targets_for_preset(store: &SkillStore, preset_id: &str) -> anyhow::Result<usize> {
     let skill_ids = store.get_skill_ids_for_scenario(preset_id)?;
     let mut count = 0;
@@ -2879,6 +2844,7 @@ fn count_synced_targets_for_preset(store: &SkillStore, preset_id: &str) -> anyho
     Ok(count)
 }
 
+#[allow(dead_code)]
 fn replacement_preset_after_deactivate(
     store: &SkillStore,
     deactivated_id: &str,

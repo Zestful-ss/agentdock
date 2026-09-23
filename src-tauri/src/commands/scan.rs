@@ -4,7 +4,10 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::core::{
-    error::AppError, installer, scanner, skill_store::SkillStore, sync_metadata, tool_adapters,
+    canonical,
+    canonical::{UserSkillRegistration},
+    content_hash, error::AppError, scanner, skill_metadata, skill_store::SkillStore,
+    sync_metadata, tool_adapters,
 };
 
 fn canonicalize_lossy(path: &str) -> PathBuf {
@@ -94,47 +97,43 @@ pub async fn import_existing_skill(
     tauri::async_runtime::spawn_blocking(move || {
         sync_metadata::with_repo_lock("import existing skill", || {
             let path = PathBuf::from(&source_path);
-            let resolved_name = installer::resolve_local_skill_name(&path, name.as_deref())?;
+            let resolved_name = name
+                .as_deref()
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| skill_metadata::infer_skill_name(&path));
+            let clean = canonical::sanitize_component(&resolved_name)?;
 
-            let result = installer::install_from_local(&path, Some(&resolved_name))?;
-
+            let root = canonical::resolve_user_root()?;
+            let dest = root.root.join(&clean);
             if store
-                .get_skill_by_central_path(&result.central_path.to_string_lossy())?
+                .get_skill_by_central_path(&dest.to_string_lossy())?
                 .is_some()
             {
                 return Ok(());
             }
 
-            let now = chrono::Utc::now().timestamp_millis();
-            let id = uuid::Uuid::new_v4().to_string();
+            let installed = canonical::install_skill_dir_as(&path, &root, &clean, false)?;
+            let meta = skill_metadata::parse_skill_md(&installed);
+            let hash = content_hash::hash_directory(&installed).map_err(AppError::io)?;
 
-            let record = crate::core::skill_store::SkillRecord {
-                id: id.clone(),
-                name: result.name,
-                description: result.description,
-                source_type: "import".to_string(),
-                source_ref: Some(source_path),
-                source_ref_resolved: None,
-                source_subpath: None,
-                source_branch: None,
-                source_revision: None,
-                remote_revision: None,
-                central_path: result.central_path.to_string_lossy().to_string(),
-                content_hash: Some(result.content_hash),
-                enabled: true,
-                created_at: now,
-                updated_at: now,
-                status: "ok".to_string(),
-                update_status: "local_only".to_string(),
-                last_checked_at: Some(now),
-                last_check_error: None,
-            };
+            canonical::register_user_skill(
+                &store,
+                &UserSkillRegistration {
+                    name: clean,
+                    description: meta.description,
+                    central_path: installed,
+                    content_hash: hash,
+                    source_type: "import".to_string(),
+                    source_ref: Some(source_path),
+                },
+            )
+            .map_err(anyhow::Error::from)?;
 
-            store.insert_skill(&record)?;
-
-            sync_metadata::write_all_from_db_unlocked(&store)
+            Ok(())
         })
-        .map_err(AppError::io)?;
+        .map_err(AppError::db)?;
 
         Ok(())
     })
@@ -148,8 +147,7 @@ pub async fn import_all_discovered(store: State<'_, Arc<SkillStore>>) -> Result<
         sync_metadata::with_repo_lock("import all discovered skills", || {
             let discovered = store.get_all_discovered()?;
             let groups = scanner::group_discovered(&discovered);
-
-            let mut changed = false;
+            let root = canonical::resolve_user_root()?;
 
             for group in groups {
                 if group.imported {
@@ -157,51 +155,45 @@ pub async fn import_all_discovered(store: State<'_, Arc<SkillStore>>) -> Result<
                 }
                 if let Some(first) = group.locations.first() {
                     let path = PathBuf::from(&first.found_path);
+                    let clean = match canonical::sanitize_component(&group.name) {
+                        Ok(c) => c,
+                        Err(_) => continue,
+                    };
+                    let dest = root.root.join(&clean);
+                    if store
+                        .get_skill_by_central_path(&dest.to_string_lossy())?
+                        .is_some()
+                    {
+                        continue;
+                    }
 
-                    if let Ok(result) = installer::install_from_local(&path, Some(&group.name)) {
-                        if store
-                            .get_skill_by_central_path(&result.central_path.to_string_lossy())?
-                            .is_some()
-                        {
-                            continue;
-                        }
-
-                        let now = chrono::Utc::now().timestamp_millis();
-                        let id = uuid::Uuid::new_v4().to_string();
-                        let record = crate::core::skill_store::SkillRecord {
-                            id: id.clone(),
-                            name: result.name,
-                            description: result.description,
-                            source_type: "import".to_string(),
-                            source_ref: Some(first.found_path.clone()),
-                            source_ref_resolved: None,
-                            source_subpath: None,
-                            source_branch: None,
-                            source_revision: None,
-                            remote_revision: None,
-                            central_path: result.central_path.to_string_lossy().to_string(),
-                            content_hash: Some(result.content_hash),
-                            enabled: true,
-                            created_at: now,
-                            updated_at: now,
-                            status: "ok".to_string(),
-                            update_status: "local_only".to_string(),
-                            last_checked_at: Some(now),
-                            last_check_error: None,
+                    if let Ok(installed) = canonical::install_skill_dir_as(&path, &root, &clean, false)
+                    {
+                        let meta = skill_metadata::parse_skill_md(&installed);
+                        let hash = match content_hash::hash_directory(&installed) {
+                            Ok(h) => h,
+                            Err(_) => continue,
                         };
-                        store.insert_skill(&record)?;
-                        changed = true;
+
+                        canonical::register_user_skill(
+                            &store,
+                            &UserSkillRegistration {
+                                name: clean,
+                                description: meta.description,
+                                central_path: installed,
+                                content_hash: hash,
+                                source_type: "import".to_string(),
+                                source_ref: Some(first.found_path.clone()),
+                            },
+                        )
+                        .map_err(anyhow::Error::from)?;
                     }
                 }
             }
 
-            if changed {
-                sync_metadata::write_all_from_db_unlocked(&store)?;
-            }
-
             Ok(())
         })
-        .map_err(AppError::io)?;
+        .map_err(AppError::db)?;
 
         Ok(())
     })

@@ -18,7 +18,7 @@ use crate::core::{
     scanner,
     skill_metadata::{self, is_valid_skill_dir},
     skill_store::{SkillRecord, SkillStore, SkillTargetRecord},
-    sync_engine, sync_metadata,
+    sync_metadata,
     timing::should_log_first_or_slow,
 };
 
@@ -79,18 +79,20 @@ enum UpdateOutcome {
     },
 }
 
-/// Everything a replacement would take away — from the library and from every
-/// copy-mode deployment of this skill.
+/// Everything a replacement would take away from the canonical library.
 ///
 /// `staged` is the tree about to be installed, or `None` when the library keeps
-/// what it already has. Even then the deployments are torn down and rebuilt from
-/// it, which loses files just as effectively, so they are always checked.
+/// what it already has.
 ///
 /// Compared against the *staged* tree rather than the source it came from: the
 /// installer drops `.git` and every symlink, so anything else would report a
 /// path as surviving that the swap goes on to remove.
+///
+/// V1: harness copy targets are observe-only. Only the canonical library is
+/// ever rewritten here; deployed harness paths are never scanned for removals
+/// (and never deleted by this flow).
 pub(crate) fn pending_removals_for(
-    store: &SkillStore,
+    _store: &SkillStore,
     skill: &SkillRecord,
     staged: Option<&Path>,
 ) -> Result<Vec<PendingRemoval>, AppError> {
@@ -101,25 +103,6 @@ pub(crate) fn pending_removals_for(
         for path in crate::core::removals::removed_paths(library, staged).map_err(AppError::io)? {
             pending.push(PendingRemoval {
                 location: LIBRARY_LOCATION.to_string(),
-                path,
-            });
-        }
-    }
-
-    let effective_new = staged.unwrap_or(library);
-    for target in store
-        .get_targets_for_skill(&skill.id)
-        .map_err(AppError::db)?
-    {
-        if target.mode != "copy" {
-            continue;
-        }
-        for path in
-            crate::core::removals::removed_paths(Path::new(&target.target_path), effective_new)
-                .map_err(AppError::io)?
-        {
-            pending.push(PendingRemoval {
-                location: target.tool.clone(),
                 path,
             });
         }
@@ -759,10 +742,11 @@ pub fn delete_managed_skills_by_ids(
                 continue;
             };
 
-            let targets = store.get_targets_for_skill(skill_id)?;
-            for target in &targets {
-                let target_path = PathBuf::from(&target.target_path);
-                sync_engine::remove_target(&target_path).ok();
+            // V1: delete only the canonical directory and the DB rows
+            // (skill + target records). Harness copies under target_path are
+            // observe-only and are never touched.
+            for target in store.get_targets_for_skill(skill_id)? {
+                store.delete_target(skill_id, &target.tool)?;
             }
 
             let central = PathBuf::from(&skill.central_path);
@@ -901,10 +885,36 @@ pub async fn install_local(
             };
             let _lock =
                 RepoLock::acquire_foreground("install local skill").map_err(AppError::db)?;
-            let result =
-                installer::install_from_local(&path, name.as_deref()).map_err(AppError::io)?;
-            let skill_name = result.name.clone();
-            // Install only adds the skill to the central library; preset
+            let resolved = crate::core::canonical::resolve_user_root()?;
+            let prepared = installer::prepare_local_source(&path).map_err(AppError::io)?;
+            let dest = match name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+                Some(n) => {
+                    let clean = crate::core::canonical::sanitize_component(n)?;
+                    crate::core::canonical::install_skill_dir_as(
+                        prepared.skill_dir(),
+                        &resolved,
+                        &clean,
+                        false,
+                    )?
+                }
+                None => {
+                    crate::core::canonical::install_skill_dir(prepared.skill_dir(), &resolved, false)?
+                }
+            };
+            let skill_name = dest
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let meta = skill_metadata::parse_skill_md(&dest);
+            let hash =
+                crate::core::content_hash::hash_directory(&dest).map_err(AppError::io)?;
+            let result = installer::InstallResult {
+                name: skill_name.clone(),
+                description: meta.description,
+                central_path: dest,
+                content_hash: hash,
+            };
+            // Install only adds the skill to the canonical library; preset
             // membership is an explicit action (see issue #213).
             let skill_id = store_installed_skill_unlocked(&store, &result, &metadata, None)?;
             Ok((skill_id, skill_name))
@@ -913,110 +923,6 @@ pub async fn install_local(
         outcome.map(|_| ())
     })
     .await?
-}
-
-#[tauri::command]
-pub async fn install_git(
-    repo_url: String,
-    name: Option<String>,
-    store: State<'_, Arc<SkillStore>>,
-    cancel_registry: State<'_, Arc<InstallCancelRegistry>>,
-    app_handle: tauri::AppHandle,
-) -> Result<(), AppError> {
-    let store = store.inner().clone();
-    let proxy_url = store.proxy_url();
-    let registry = cancel_registry.inner().clone();
-    let cancel_key = repo_url.clone();
-    let cancel = registry.register(&cancel_key);
-    let _cancel_guard = CancelRegistrationGuard::new(registry.clone(), cancel_key);
-
-    tauri::async_runtime::spawn_blocking(move || {
-        use tauri::Emitter;
-        let emit_progress = |phase: &str| {
-            app_handle
-                .emit(
-                    "install-progress",
-                    serde_json::json!({
-                        "skill_id": repo_url,
-                        "phase": phase,
-                    }),
-                )
-                .ok();
-        };
-
-        let outcome = (|| -> Result<(String, String), AppError> {
-            git_fetcher::validate_git_url(&repo_url).map_err(AppError::git)?;
-            emit_progress("cloning");
-            let parsed = git_fetcher::parse_git_source_resolved(&repo_url, proxy_url.as_deref());
-            let app_for_progress = app_handle.clone();
-            let url_for_progress = repo_url.clone();
-            let progress_cb: git_fetcher::ProgressCallback = Box::new(move |msg: &str| {
-                app_for_progress
-                    .emit(
-                        "install-progress",
-                        serde_json::json!({
-                            "skill_id": url_for_progress,
-                            "phase": "cloning",
-                            "detail": msg,
-                        }),
-                    )
-                    .ok();
-            });
-            let temp_dir = git_fetcher::clone_repo_ref_scoped(
-                &parsed.clone_url,
-                parsed.branch.as_deref(),
-                parsed.subpath.as_deref(),
-                Some(&cancel),
-                proxy_url.as_deref(),
-                Some(progress_cb),
-            )
-            .map_err(AppError::classify_git_error)?;
-
-            emit_progress("installing");
-            let install_result = (|| -> Result<(String, String), AppError> {
-                let _lock =
-                    RepoLock::acquire_foreground("install git skill").map_err(AppError::db)?;
-                let skill_dir = resolve_skill_dir(&temp_dir, parsed.subpath.as_deref(), None)?;
-                let revision = git_fetcher::get_head_revision(&temp_dir).map_err(AppError::git)?;
-                let result = installer::install_from_git_dir(&skill_dir, name.as_deref())
-                    .map_err(AppError::io)?;
-                let metadata = InstallSourceMetadata {
-                    source_type: "git".to_string(),
-                    source_ref: Some(parsed.original_url.clone()),
-                    source_ref_resolved: Some(parsed.clone_url.clone()),
-                    source_subpath: git_fetcher::relative_subpath(&temp_dir, &skill_dir),
-                    source_branch: parsed.branch.clone(),
-                    source_revision: Some(revision.clone()),
-                    remote_revision: Some(revision),
-                    update_status: "up_to_date".to_string(),
-                };
-                let skill_name = result.name.clone();
-                let skill_id = store_installed_skill_unlocked(&store, &result, &metadata, None)?;
-                Ok((skill_id, skill_name))
-            })();
-
-            git_fetcher::cleanup_temp(&temp_dir);
-            install_result
-        })();
-
-        log_install_outcome(&store, "git", outcome.as_ref());
-        outcome?;
-
-        emit_progress("done");
-        Ok(())
-    })
-    .await?
-}
-
-#[tauri::command]
-pub async fn install_from_skillssh(
-    _source: String,
-    _skill_id: String,
-    _store: State<'_, Arc<SkillStore>>,
-    _cancel_registry: State<'_, Arc<InstallCancelRegistry>>,
-    _app_handle: tauri::AppHandle,
-) -> Result<(), AppError> {
-    Err(crate::core::v1::blocked_write())
 }
 
 /// Clone a git repo and return a preview list of skills found, without installing.
@@ -1164,9 +1070,9 @@ pub async fn confirm_git_install(
 }
 
 /// Inner install loop, split out for tests (the command adds temp validation
-/// and temp lifecycle around it).
+/// and temp lifecycle around it). Also used by the CLI for git installs.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn confirm_git_install_inner(
+pub fn confirm_git_install_inner(
     store: &SkillStore,
     repo_url: &str,
     temp_path: &Path,
@@ -1941,7 +1847,6 @@ pub async fn relink_local_skill_source(
                     "local_only",
                 )
                 .map_err(AppError::db)?;
-            resync_copy_targets(&store, &skill.id)?;
             sync_metadata::write_all_from_db_unlocked(&store).map_err(AppError::db)?;
             Ok((Vec::new(), None))
         })();
@@ -2221,7 +2126,6 @@ pub fn update_git_skill_internal(
                     "up_to_date",
                 )
                 .map_err(AppError::db)?;
-            resync_copy_targets(store, &skill.id)?;
             sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
         } else {
             store
@@ -2236,7 +2140,6 @@ pub fn update_git_skill_internal(
             store
                 .update_skill_check_state(&skill.id, Some(&remote_revision), "up_to_date", None)
                 .map_err(AppError::db)?;
-            resync_copy_targets(store, &skill.id)?;
             sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
         }
         Ok(UpdateOutcome::Applied { content_changed })
@@ -2475,7 +2378,6 @@ pub fn set_git_source_internal(
             )
             .map_err(AppError::db)?;
         source_committed.set(true);
-        resync_copy_targets(store, &skill.id)?;
         sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
         Ok((resolved_subpath.unwrap_or_default(), content_changed))
     })();
@@ -2612,14 +2514,13 @@ pub fn reimport_local_skill_internal(
                 "local_only",
             )
             .map_err(AppError::db)?;
-        resync_copy_targets(store, &skill.id)?;
         sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
         Ok((Vec::new(), None))
     })();
 
     match result {
         Ok((pending_removals, removal_approval)) => Ok(ReimportSkillResult {
-            skill: managed_skill_by_id(store, skill_id)?,
+            skill: managed_skill_by_id(store, &skill_id)?,
             pending_removals,
             removal_approval,
         }),
@@ -2659,21 +2560,13 @@ pub fn store_installed_skill_unlocked(
                 &metadata.update_status,
             )
             .map_err(AppError::db)?;
+        // V1: scenario membership only — never sync harness directories from install.
         if let Some(scenario_id) = active_scenario_id {
             store
                 .add_skill_to_scenario(scenario_id, &existing.id)
                 .map_err(AppError::db)?;
         }
         sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
-
-        if let Some(scenario_id) = active_scenario_id {
-            if let Err(e) =
-                super::presets::sync_skill_to_active_preset(store, scenario_id, &existing.id)
-            {
-                log::warn!("Failed to sync reinstalled skill to preset: {e}");
-            }
-        }
-
         return Ok(existing.id);
     }
 
@@ -2708,13 +2601,6 @@ pub fn store_installed_skill_unlocked(
             .map_err(AppError::db)?;
     }
     sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
-
-    if let Some(scenario_id) = active_scenario_id {
-        if let Err(e) = super::presets::sync_skill_to_active_preset(store, scenario_id, &id) {
-            log::warn!("Failed to sync newly installed skill to preset: {e}");
-        }
-    }
-
     Ok(id)
 }
 
@@ -3204,49 +3090,6 @@ pub fn swap_skill_directory(staged_path: &Path, current_path: &Path) -> Result<(
     crate::core::staged::swap_dir_staged(staged_path, current_path)
 }
 
-pub fn resync_copy_targets(store: &SkillStore, skill_id: &str) -> Result<(), AppError> {
-    let skill = store
-        .get_skill_by_id(skill_id)
-        .map_err(AppError::db)?
-        .ok_or_else(|| AppError::not_found("Skill not found"))?;
-    let source = PathBuf::from(&skill.central_path);
-    let targets = store
-        .get_targets_for_skill(skill_id)
-        .map_err(AppError::db)?;
-
-    for target in targets {
-        if target.mode != "copy" {
-            continue;
-        }
-
-        // Recorded: this walks existing rows, so each path is one we wrote.
-        // The row's mode is filtered to "copy" above, and sync_engine still
-        // refuses if what is on disk no longer matches that record.
-        sync_engine::sync_skill(
-            &source,
-            Path::new(&target.target_path),
-            sync_engine::SyncMode::Copy,
-            sync_engine::ReplacePolicy::Recorded {
-                mode: target.mode.as_str(),
-            },
-        )
-        .map_err(AppError::io)?;
-
-        let updated_target = SkillTargetRecord {
-            synced_at: Some(chrono::Utc::now().timestamp_millis()),
-            status: "ok".to_string(),
-            last_error: None,
-            // Refresh the hash so the startup freshness check (#153)
-            // sees this resync as up-to-date instead of stale.
-            source_hash: skill.content_hash.clone(),
-            ..target
-        };
-        store.insert_target(&updated_target).map_err(AppError::db)?;
-    }
-
-    Ok(())
-}
-
 #[tauri::command]
 pub async fn get_all_tags(store: State<'_, Arc<SkillStore>>) -> Result<Vec<String>, AppError> {
     let store = store.inner().clone();
@@ -3400,6 +3243,7 @@ pub async fn batch_import_folder(
         let mut imported = 0usize;
         let mut skipped = 0usize;
         let mut errors = Vec::new();
+        let resolved = crate::core::canonical::resolve_user_root()?;
 
         for (i, dir) in skill_dirs.iter().enumerate() {
             let name = skill_metadata::infer_skill_name(dir);
@@ -3415,8 +3259,8 @@ pub async fn batch_import_folder(
                 )
                 .ok();
 
-            // Check if already imported by prospective central path
-            let prospective_central = central_repo::skills_dir().join(&name);
+            // Check if already imported by prospective canonical path
+            let prospective_central = resolved.root.join(&name);
             let central_str = prospective_central.to_string_lossy().to_string();
             if let Ok(Some(_)) = store.get_skill_by_central_path(&central_str) {
                 skipped += 1;
@@ -3426,8 +3270,21 @@ pub async fn batch_import_folder(
             let install_result = (|| -> Result<String, AppError> {
                 let _lock =
                     RepoLock::acquire_foreground("batch import skill").map_err(AppError::db)?;
-                let result =
-                    installer::install_from_local(dir, Some(&name)).map_err(AppError::io)?;
+                let dest = crate::core::canonical::install_skill_dir_as(
+                    dir,
+                    &resolved,
+                    &name,
+                    false,
+                )?;
+                let meta = skill_metadata::parse_skill_md(&dest);
+                let hash =
+                    crate::core::content_hash::hash_directory(&dest).map_err(AppError::io)?;
+                let result = installer::InstallResult {
+                    name: name.clone(),
+                    description: meta.description,
+                    central_path: dest,
+                    content_hash: hash,
+                };
                 let metadata = InstallSourceMetadata {
                     source_type: "local".to_string(),
                     source_ref: Some(dir.to_string_lossy().to_string()),
@@ -3572,7 +3429,10 @@ mod tests {
         assert!(repo.store.get_skill_by_id("skill-2").unwrap().is_some());
         assert!(!skill_one_dir.exists());
         assert!(skill_two_dir.exists());
-        assert!(!target_dir.exists());
+        // V1: harness copies are observe-only — delete removes the DB target
+        // row but never the on-disk harness directory.
+        assert!(target_dir.exists());
+        assert!(repo.store.get_targets_for_skill("skill-1").unwrap().is_empty());
         assert!(!sync_metadata::metadata_dir()
             .join("skills/skill-1.json")
             .exists());
@@ -3581,11 +3441,10 @@ mod tests {
             .exists());
     }
 
-    /// The whole point of the preflight: it must see the user's file in the
-    /// library *and* the one in an agent's deployed copy, and say which is
-    /// which — a bare filename does not tell anyone where to go and rescue it.
+    /// V1 preflight covers only the canonical library. Harness copy targets
+    /// are observe-only and are never listed (or deleted) by a replacement.
     #[test]
-    fn the_preflight_covers_the_library_and_every_deployed_copy() {
+    fn the_preflight_covers_the_library_and_skips_harness_copies() {
         let repo = test_repo();
         let central = write_skill_dir("ppt-master");
         fs::create_dir_all(central.join("templates")).unwrap();
@@ -3594,7 +3453,7 @@ mod tests {
             .insert_skill(&sample_skill("skill-1", "ppt-master", &central))
             .unwrap();
 
-        // A copy-mode deployment the user has also written into.
+        // A copy-mode harness deployment the user has also written into.
         let target_dir = repo._tmp.path().join("agent/ppt-master");
         fs::create_dir_all(&target_dir).unwrap();
         fs::write(target_dir.join("SKILL.md"), "x").unwrap();
@@ -3630,16 +3489,15 @@ mod tests {
             "the library's own directory must be reported: {found:?}"
         );
         assert!(
-            found.contains(&("claude_code".to_string(), "notes.md".to_string())),
-            "the agent copy is torn down and rebuilt too: {found:?}"
+            !found.iter().any(|(location, _)| location == "claude_code"),
+            "harness copies are observe-only and must not appear: {found:?}"
         );
     }
 
-    /// With no content change nothing is swapped, so the library keeps what it
-    /// has — but the deployments are still rebuilt from it, which is its own way
-    /// to lose a file.
+    /// A metadata-only update never rewrites harness copies, so there is
+    /// nothing pending against a harness target even when it holds extra files.
     #[test]
-    fn a_metadata_only_update_still_checks_the_deployed_copies() {
+    fn a_metadata_only_update_never_lists_harness_copies() {
         let repo = test_repo();
         let central = write_skill_dir("stable");
         repo.store
@@ -3667,9 +3525,10 @@ mod tests {
         let skill = repo.store.get_skill_by_id("skill-1").unwrap().unwrap();
         // `None` staged: the library is unchanged, and is itself the baseline.
         let pending = pending_removals_for(&repo.store, &skill, None).unwrap();
-        assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].location, "cursor");
-        assert_eq!(pending[0].path, "mine.txt");
+        assert!(
+            pending.is_empty(),
+            "harness copies must not be listed: {pending:?}"
+        );
     }
 
     /// Symlink-mode deployments are not copied over, so they are not at risk and

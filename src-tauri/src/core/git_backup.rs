@@ -270,7 +270,6 @@ fn detect_upstream_health(dir: &Path, has_remote: bool) -> String {
 }
 
 /// Initialize a new git repository in the skills directory.
-#[allow(dead_code)]
 pub fn init_repo(skills_dir: &Path, device_name: &str) -> Result<()> {
     let _lock = RepoLock::acquire_foreground("git init")?;
     init_repo_unlocked(skills_dir, device_name)
@@ -436,7 +435,6 @@ pub(crate) fn has_uncommitted_changes(skills_dir: &Path) -> Result<bool> {
 }
 
 /// Stage all changes and create a commit.
-#[allow(dead_code)]
 pub fn commit_all(skills_dir: &Path, message: &str) -> Result<()> {
     let _lock = RepoLock::acquire_foreground("git commit")?;
     commit_all_unlocked(skills_dir, message)
@@ -679,13 +677,6 @@ fn push_via_git2(skills_dir: &Path, branch: &str, url: &str) -> Result<()> {
     Ok(())
 }
 
-/// Pull from the remote repository.
-#[allow(dead_code)]
-pub fn pull(skills_dir: &Path) -> Result<()> {
-    let _lock = RepoLock::acquire_foreground("git pull")?;
-    pull_unlocked(skills_dir)
-}
-
 pub(crate) fn pull_unlocked(skills_dir: &Path) -> Result<()> {
     ensure_repo(skills_dir)?;
     ensure_no_interrupted_git_operation(skills_dir)?;
@@ -839,7 +830,6 @@ pub fn list_snapshot_versions(
 
 /// Restore skills files to a snapshot tag by creating a new restore commit.
 /// Returns the safety-point tag capturing the pre-restore state.
-#[allow(dead_code)]
 pub fn restore_snapshot_version(skills_dir: &Path, tag: &str) -> Result<String> {
     let _lock = RepoLock::acquire_foreground("git restore snapshot")?;
     restore_snapshot_version_unlocked(skills_dir, tag)
@@ -916,7 +906,6 @@ pub(crate) fn restore_snapshot_version_unlocked(skills_dir: &Path, tag: &str) ->
 
 /// Clone a remote repository into the skills directory.
 /// The skills directory must be empty or non-existent.
-#[allow(dead_code)]
 pub fn clone_into(skills_dir: &Path, url: &str) -> Result<()> {
     let _lock = RepoLock::acquire_foreground("git clone")?;
     clone_into_unlocked(skills_dir, url)

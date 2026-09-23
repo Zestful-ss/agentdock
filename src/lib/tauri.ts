@@ -51,14 +51,6 @@ export interface SkillTarget {
   synced_at: number | null;
 }
 
-export interface SkillToolToggle {
-  tool: string;
-  display_name: string;
-  installed: boolean;
-  globally_enabled: boolean;
-  enabled: boolean;
-}
-
 export interface SkillDocument {
   skill_id: string;
   filename: string;
@@ -123,14 +115,6 @@ export interface ScanResult {
   groups: DiscoveredGroup[];
 }
 
-export interface SkillsShSkill {
-  id: string;
-  skill_id: string;
-  name: string;
-  source: string;
-  installs: number;
-}
-
 export interface SyncHealth {
   in_sync: number;
   project_newer: number;
@@ -145,20 +129,11 @@ export interface Project {
   path: string;
   workspace_type: "project" | "linked";
   linked_agent_name: string | null;
-  supports_skill_toggle: boolean;
   sort_order: number;
   skill_count: number;
   sync_health: SyncHealth;
   created_at: number;
   updated_at: number;
-}
-
-export interface ProjectAgentTarget {
-  key: string;
-  display_name: string;
-  enabled: boolean;
-  installed: boolean;
-  is_custom: boolean;
 }
 
 export interface ProjectSkill {
@@ -265,9 +240,6 @@ export const deleteManagedSkills = (skillIds: string[]) =>
 export const installLocal = (sourcePath: string, name?: string) =>
   invoke<void>("install_local", { sourcePath, name: name || null });
 
-export const installGit = (repoUrl: string, name?: string) =>
-  invoke<void>("install_git", { repoUrl, name: name || null });
-
 export interface GitSkillPreview {
   /** Path relative to the resolved scan root, using `/` separators. Stable key. */
   rel_path: string;
@@ -325,9 +297,6 @@ export const confirmGitInstall = (
 
 export const cancelGitPreview = (tempDir: string) =>
   invoke<void>("cancel_git_preview", { tempDir });
-
-export const installFromSkillssh = (source: string, skillId: string) =>
-  invoke<void>("install_from_skillssh", { source, skillId });
 
 export const cancelInstall = (key: string) =>
   invoke<boolean>("cancel_install", { key });
@@ -431,25 +400,6 @@ export const renameTag = (oldName: string, newName: string) =>
 export const deleteTag = (name: string) =>
   invoke<void>("delete_tag", { name });
 
-// ── Sync ──
-
-export const syncSkillToTool = (skillId: string, tool: string) =>
-  invoke<void>("sync_skill_to_tool", { skillId, tool });
-
-export const unsyncSkillFromTool = (skillId: string, tool: string) =>
-  invoke<void>("unsync_skill_from_tool", { skillId, tool });
-
-export const getSkillToolToggles = (skillId: string, presetId: string) =>
-  invoke<SkillToolToggle[]>("get_skill_tool_toggles", { skillId, presetId });
-
-export const setSkillToolToggle = (
-  skillId: string,
-  presetId: string,
-  tool: string,
-  enabled: boolean
-) =>
-  invoke<void>("set_skill_tool_toggle", { skillId, presetId, tool, enabled });
-
 // ── Scan ──
 
 export const scanLocalSkills = () => invoke<ScanResult>("scan_local_skills");
@@ -459,17 +409,6 @@ export const importExistingSkill = (sourcePath: string, name?: string) =>
 
 export const importAllDiscovered = () =>
   invoke<void>("import_all_discovered");
-
-// ── Browse ──
-
-export const fetchLeaderboard = (board: string) =>
-  invoke<SkillsShSkill[]>("fetch_leaderboard", { board });
-
-export const searchSkillssh = (query: string, limit?: number) =>
-  invoke<SkillsShSkill[]>("search_skillssh", {
-    query,
-    limit: limit ?? null,
-  });
 
 // ── Settings ──
 
@@ -779,13 +718,6 @@ export const updatePreset = (
 export const deletePreset = (id: string) =>
   invoke<void>("delete_preset", { id });
 
-/** @deprecated v1.16+: clicking a scene no longer applies. Use applyPresetToDefault. */
-export const switchPreset = (id: string) =>
-  invoke<void>("switch_preset", { id });
-
-export const applyPresetToDefault = (id: string) =>
-  invoke<void>("apply_preset_to_default", { id });
-
 export const addSkillToPreset = (skillId: string, presetId: string) =>
   invoke<void>("add_skill_to_preset", { skillId, presetId });
 
@@ -824,32 +756,26 @@ export const removeProject = (id: string) =>
 export const scanProjects = (root: string) =>
   invoke<string[]>("scan_projects", { root });
 
-export const getProjectAgentTargets = (projectId: string) =>
-  invoke<ProjectAgentTarget[]>("get_project_agent_targets", { projectId });
-
 export const getProjectSkills = (projectId: string) =>
   invoke<ProjectSkill[]>("get_project_skills", { projectId });
 
-export const getProjectSkillDocument = (projectId: string, skillRelativePath: string, agent: string) =>
-  invoke<ProjectSkillDocument>("get_project_skill_document", { projectId, skillRelativePath, agent });
+export const getProjectSkillDocument = (projectId: string, skillRelativePath: string) =>
+  invoke<ProjectSkillDocument>("get_project_skill_document", { projectId, skillRelativePath });
 
-export const importProjectSkillToCenter = (projectId: string, skillRelativePath: string, agent: string) =>
-  invoke<void>("import_project_skill_to_center", { projectId, skillRelativePath, agent });
+export const importProjectSkillToCenter = (projectId: string, skillRelativePath: string) =>
+  invoke<void>("import_project_skill_to_center", { projectId, skillRelativePath });
 
-export const exportSkillToProject = (skillId: string, projectId: string, agents?: string[]) =>
-  invoke<void>("export_skill_to_project", { skillId, projectId, agents: agents ?? null });
+export const exportSkillToProject = (skillId: string, projectId: string) =>
+  invoke<void>("export_skill_to_project", { skillId, projectId });
 
-export const updateProjectSkillToCenter = (projectId: string, skillRelativePath: string, agent: string) =>
-  invoke<void>("update_project_skill_to_center", { projectId, skillRelativePath, agent });
+export const updateProjectSkillToCenter = (projectId: string, skillRelativePath: string) =>
+  invoke<void>("update_project_skill_to_center", { projectId, skillRelativePath });
 
-export const updateProjectSkillFromCenter = (projectId: string, skillRelativePath: string, agent: string) =>
-  invoke<void>("update_project_skill_from_center", { projectId, skillRelativePath, agent });
+export const updateProjectSkillFromCenter = (projectId: string, skillRelativePath: string) =>
+  invoke<void>("update_project_skill_from_center", { projectId, skillRelativePath });
 
-export const toggleProjectSkill = (projectId: string, skillRelativePath: string, agent: string, enabled: boolean) =>
-  invoke<void>("toggle_project_skill", { projectId, skillRelativePath, agent, enabled });
-
-export const deleteProjectSkill = (projectId: string, skillRelativePath: string, agent: string) =>
-  invoke<void>("delete_project_skill", { projectId, skillRelativePath, agent });
+export const deleteProjectSkill = (projectId: string, skillRelativePath: string) =>
+  invoke<void>("delete_project_skill", { projectId, skillRelativePath });
 
 export const slugifySkillNames = (names: string[]) =>
   invoke<string[]>("slugify_skill_names", { names });
@@ -864,9 +790,6 @@ export const getGlobalLocalSkillDocument = (agent: string, skillRelativePath: st
 
 export const importGlobalLocalSkillToCenter = (agent: string, skillRelativePath: string) =>
   invoke<void>("import_global_local_skill_to_center", { agent, skillRelativePath });
-
-export const updateGlobalLocalSkillFromCenter = (agent: string, skillRelativePath: string) =>
-  invoke<void>("update_global_local_skill_from_center", { agent, skillRelativePath });
 
 export const deleteGlobalLocalSkill = (agent: string, skillRelativePath: string) =>
   invoke<void>("delete_global_local_skill", { agent, skillRelativePath });

@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.41.0] - 2026-09-23
+
+### Release Overview
+- V1 cleanup (P2): harness deploy UI and market install path gone; install paths unified on the canonical `.agents` writer; dead tray/preset/sync code removed; CLI hard-blocks deploy/undeploy/sync; project workspaces are canonical-only. Product line is **Manage `.agents`; observe Harnesses.**
+
+### User-facing
+- **Harness deployment UI removed** — Global Workspace / WorkspaceView, preset apply bar, batch sync-to-agent dialog, agent control setup card, and the Install Skills market block are gone. Skills install into user/project `.agents/skills`; harnesses are observed (Inventory), not written to.
+- **Project detail is canonical-only** — `get_project_skills` reads only `<repo>/.agents/skills`; document/update/delete/export act on the same canonical row; the Add Skills sheet no longer asks which agents to target; per-agent dots / `ProjectAgentTargets` / `exportAgents` are gone.
+- **Backup nav/page UI removed** — Git backup commands remain (Settings + first-run restore); there is no sidebar Backup page in this cut.
+- **Preset is curation** — Preset membership organizes the library (`/my-skills` deep link); tray no longer offers apply-to-agents presets.
+
+### Developer & Governance
+- **Install unification (P2.2)** — App and CLI git/local install go through `confirm_git_install_inner` / `canonical::install_skill_dir*` (`replace=false` → `target_conflict`). CLI git install does not take RepoLock outside the inner path; scenario membership is fixed up after the lock is released.
+- **Dead code removal (P2.3)** — Deleted `commands/browse.rs`, `commands/sync.rs`, `apply_preset_from_tray` / tray schedule refresh, `installer::install_from_git_dir`, and unused helpers in `git_backup`, `scanner`, `tool_adapters`, `sync_metadata`, `agent_workspace`. Moved #363 shared-directory regression tests into `scenario_service`.
+- **V1 invariant closure (P2.6)** — Startup only ensures default preset state (no backfill spawn); `update_global_local_skill_from_center` unregistered; CLI hard-blocks `skills deploy/undeploy/sync` and `presets apply/deactivate/deploy/undeploy` with `v1::POLICY_MESSAGE`; `install --sync/--sync-preset` retired; `delete_managed_skills_by_ids` no longer touches `target_path`; update/reimport/set-source no longer call `resync_copy_targets`; `pending_removals_for` no longer inspects harness copies. `scan.rs` import paths reuse `canonical::register_user_skill`.
+- **Docs** — README CLI examples drop deploy/undeploy/sync; `manage-skills/SKILL.md` drops Deploy/Legacy exclusive sync sections and no longer claims CLI deploy is only “refused”; ARCHITECTURE notes project export blocked unless dest is `.agents/skills`. i18n dead-key scan: 502 keys, DEAD=0.
+
 ## [1.40.0] - 2026-09-17
 
 ### Release Overview

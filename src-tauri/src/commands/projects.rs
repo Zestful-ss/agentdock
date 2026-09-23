@@ -9,7 +9,7 @@ use tauri::State;
 
 use crate::core::skill_store::{ProjectRecord, SkillRecord, SkillStore};
 use crate::core::timing::should_log_first_or_slow;
-use crate::core::{error::AppError, installer, project_scanner, sync_engine, tool_adapters};
+use crate::core::{canonical, content_hash, error::AppError, project_scanner, skill_metadata, sync_engine, sync_metadata, tool_adapters};
 
 #[derive(Serialize, Default)]
 pub struct SyncHealthDto {
@@ -42,13 +42,14 @@ pub struct ProjectSkillDocumentDto {
     pub content: String,
 }
 
-#[derive(Serialize, Clone)]
-pub struct ProjectAgentTargetDto {
-    pub key: String,
-    pub display_name: String,
-    pub enabled: bool,
-    pub installed: bool,
-    pub is_custom: bool,
+/// V1 project skills root is always `<repo>/.agents/skills`.
+/// Harness adapter dirs are never listed or written for project workspaces.
+fn canonical_skill_config() -> project_scanner::AgentSkillConfig {
+    project_scanner::AgentSkillConfig {
+        key: "agents".to_string(),
+        display_name: "Project".to_string(),
+        relative_skills_dir: ".agents/skills".to_string(),
+    }
 }
 
 fn agent_skill_configs(store: &SkillStore) -> Vec<project_scanner::AgentSkillConfig> {
@@ -87,95 +88,21 @@ fn agent_skill_configs(store: &SkillStore) -> Vec<project_scanner::AgentSkillCon
         .collect()
 }
 
-fn linked_workspace_agent_key(rec: &ProjectRecord) -> String {
-    rec.linked_agent_key
-        .clone()
-        .unwrap_or_else(|| slugify_skill_dir_name(&rec.name))
-}
-
-fn linked_workspace_agent_name(rec: &ProjectRecord) -> String {
-    rec.linked_agent_name
-        .clone()
-        .unwrap_or_else(|| rec.name.clone())
-}
-
 fn read_workspace_skills(
     rec: &ProjectRecord,
-    configs: &[project_scanner::AgentSkillConfig],
+    _configs: &[project_scanner::AgentSkillConfig],
 ) -> Vec<project_scanner::ProjectSkillInfo> {
-    if rec.workspace_type == "linked" {
-        return project_scanner::read_linked_workspace_skills(
-            Path::new(&rec.path),
-            rec.disabled_path.as_deref().map(Path::new),
-            &linked_workspace_agent_key(rec),
-            &linked_workspace_agent_name(rec),
-            true,
-        );
-    }
-    project_scanner::read_project_skills(Path::new(&rec.path), configs)
+    // V1: one canonical root only (`<repo>/.agents/skills`). Linked workspaces
+    // resolve the same way as writes (`canonical::resolve_project_root`), so
+    // read and document/update/delete always hit the same row.
+    project_scanner::read_project_skills(Path::new(&rec.path), &[canonical_skill_config()])
 }
 
-/// Resolve the enabled and disabled skills root directories for a given agent in a workspace.
-fn resolve_agent_skills_roots(
-    store: &SkillStore,
-    rec: &ProjectRecord,
-    agent: &str,
-) -> Option<(PathBuf, Option<PathBuf>)> {
-    if rec.workspace_type == "linked" {
-        if linked_workspace_agent_key(rec) != agent {
-            return None;
-        }
-        return Some((
-            PathBuf::from(&rec.path),
-            rec.disabled_path.as_ref().map(PathBuf::from),
-        ));
-    }
-
-    let adapter = tool_adapters::all_tool_adapters(store)
-        .into_iter()
-        .find(|adapter| adapter.key == agent)?;
-    let project_dir = adapter.project_relative_skills_dir();
-    let skills_root = Path::new(&rec.path).join(project_dir);
-    let disabled_root = Path::new(&rec.path).join(format!("{}-disabled", project_dir));
-    Some((skills_root, Some(disabled_root)))
-}
-
-fn project_agent_targets_for_record(
-    store: &SkillStore,
-    rec: &ProjectRecord,
-) -> Vec<ProjectAgentTargetDto> {
-    if rec.workspace_type == "linked" {
-        return vec![ProjectAgentTargetDto {
-            key: linked_workspace_agent_key(rec),
-            display_name: linked_workspace_agent_name(rec),
-            enabled: true,
-            installed: true,
-            is_custom: false,
-        }];
-    }
-
-    let disabled_tools: std::collections::HashSet<String> = store
-        .get_setting("disabled_tools")
-        .ok()
-        .flatten()
-        .and_then(|value| serde_json::from_str::<Vec<String>>(&value).ok())
-        .unwrap_or_default()
-        .into_iter()
-        .collect();
-
-    agent_skill_configs(store)
-        .into_iter()
-        .map(|config| {
-            let adapter = tool_adapters::find_adapter_with_store(store, &config.key);
-            ProjectAgentTargetDto {
-                enabled: !disabled_tools.contains(&config.key),
-                installed: adapter.as_ref().map(|a| a.is_installed()).unwrap_or(false),
-                is_custom: adapter.as_ref().map(|a| a.is_custom).unwrap_or(false),
-                key: config.key,
-                display_name: config.display_name,
-            }
-        })
-        .collect()
+/// Resolve the canonical skills root for a workspace (V1: `<repo>/.agents/skills`).
+fn resolve_canonical_skills_roots(rec: &ProjectRecord) -> (PathBuf, Option<PathBuf>) {
+    let skills_root = crate::core::paths::project_agents_skills_dir(Path::new(&rec.path));
+    // Canonical layout has no harness `-disabled` sibling; kept for call-site shape.
+    (skills_root, None)
 }
 
 /// Convert a project record into its DTO, folding the copies of one logical
@@ -775,22 +702,6 @@ pub async fn scan_projects(
 }
 
 #[tauri::command]
-pub async fn get_project_agent_targets(
-    store: State<'_, Arc<SkillStore>>,
-    project_id: String,
-) -> Result<Vec<ProjectAgentTargetDto>, AppError> {
-    let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let record = store
-            .get_project_by_id(&project_id)
-            .map_err(AppError::db)?
-            .ok_or_else(|| AppError::not_found("Workspace not found"))?;
-        Ok(project_agent_targets_for_record(&store, &record))
-    })
-    .await?
-}
-
-#[tauri::command]
 pub async fn get_project_skills(
     store: State<'_, Arc<SkillStore>>,
     project_id: String,
@@ -828,7 +739,6 @@ pub async fn get_project_skills(
 pub async fn get_project_skill_document(
     project_id: String,
     skill_relative_path: String,
-    agent: String,
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<ProjectSkillDocumentDto, AppError> {
     let store = store.inner().clone();
@@ -840,57 +750,20 @@ pub async fn get_project_skill_document(
             .map_err(AppError::db)?
             .ok_or_else(|| AppError::not_found("Workspace not found"))?;
 
-        let (skills_root, disabled_root) = resolve_agent_skills_roots(&store, &record, &agent)
-            .ok_or_else(|| AppError::not_found(format!("Unknown workspace agent: {}", agent)))?;
-        let disabled_root_copy = disabled_root.clone();
+        // V1: one canonical root; the relative path is the identity of the row.
+        let (skills_root, _) = resolve_canonical_skills_roots(&record);
         let skill_dir = skills_root.join(&skill_relative_path);
-        let skill_dir = if skill_dir.is_dir() {
-            ensure_dir_within_root(&skill_dir, &skills_root)?;
-            skill_dir
-        } else if let Some(disabled_root) = disabled_root {
-            let disabled = disabled_root.join(&skill_relative_path);
-            if disabled.is_dir() {
-                ensure_dir_within_root(&disabled, &disabled_root)?;
-                disabled
-            } else {
-                return Err(AppError::not_found("Skill directory not found"));
-            }
-        } else {
+        ensure_dir_within_root(&skill_dir, &skills_root)?;
+        if !skill_dir.is_dir() {
             return Err(AppError::not_found("Skill directory not found"));
-        };
-
-        // Collect all allowed roots for symlink target validation
-        let mut allowed_roots: Vec<PathBuf> = vec![skills_root.clone()];
-        if let Some(dr) = disabled_root_copy {
-            allowed_roots.push(dr);
         }
-        // For project workspaces, also allow the project root itself
-        if record.workspace_type != "linked" {
-            allowed_roots.push(PathBuf::from(&record.path));
-        }
+        let skill_dir = skill_dir;
 
         let candidates = ["SKILL.md", "skill.md", "CLAUDE.md", "README.md"];
         for candidate in &candidates {
             let file_path = skill_dir.join(candidate);
             if !file_path.exists() {
                 continue;
-            }
-            // For symlinks, verify the resolved target stays within an allowed root
-            if let Ok(meta) = std::fs::symlink_metadata(&file_path) {
-                if meta.file_type().is_symlink() {
-                    let resolved = match std::fs::canonicalize(&file_path) {
-                        Ok(r) => r,
-                        Err(_) => continue, // broken symlink
-                    };
-                    let in_allowed_root = allowed_roots.iter().any(|root| {
-                        std::fs::canonicalize(root)
-                            .map(|canon| resolved.starts_with(&canon))
-                            .unwrap_or(false)
-                    });
-                    if !in_allowed_root {
-                        continue;
-                    }
-                }
             }
             if file_path.is_file() {
                 let content = std::fs::read_to_string(&file_path)?;
@@ -914,47 +787,79 @@ pub async fn import_project_skill_to_center(
     store: State<'_, Arc<SkillStore>>,
     project_id: String,
     skill_relative_path: String,
-    agent: String,
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        ensure_safe_skill_relative_path(&skill_relative_path)?;
+        import_project_skill_to_center_blocking(&store, &project_id, &skill_relative_path)
+    })
+    .await?
+}
 
-        let record = store
-            .get_project_by_id(&project_id)
-            .map_err(AppError::db)?
-            .ok_or_else(|| AppError::not_found("Workspace not found"))?;
+fn import_project_skill_to_center_blocking(
+    store: &SkillStore,
+    project_id: &str,
+    skill_relative_path: &str,
+) -> Result<(), AppError> {
+    ensure_safe_skill_relative_path(skill_relative_path)?;
 
-        let configs = agent_skill_configs(&store);
-        let skills = read_workspace_skills(&record, &configs);
-        let skill = skills
-            .iter()
-            .find(|s| s.relative_path == skill_relative_path && s.agent == agent)
-            .ok_or_else(|| AppError::not_found("Skill not found in workspace"))?;
+    let record = store
+        .get_project_by_id(project_id)
+        .map_err(AppError::db)?
+        .ok_or_else(|| AppError::not_found("Workspace not found"))?;
 
+    let configs = agent_skill_configs(store);
+    let skills = read_workspace_skills(&record, &configs);
+    let skill = skills
+        .iter()
+        .find(|s| s.relative_path == skill_relative_path)
+        .ok_or_else(|| AppError::not_found("Skill not found in workspace"))?;
+
+    import_project_skill_info(store, skill)
+}
+
+/// RepoLock → fs → SkillStore → sync_metadata, matching every other
+/// Project → User entry (Git / Local / Adopt / Migration).
+fn import_project_skill_info(
+    store: &SkillStore,
+    skill: &project_scanner::ProjectSkillInfo,
+) -> Result<(), AppError> {
+    sync_metadata::with_repo_lock("import project skill to center", || {
+        let root = canonical::resolve_user_root()?;
         let source_path = PathBuf::from(&skill.path);
-        let all_managed = store.get_all_skills().unwrap_or_default();
-        // Use the same matching logic as the UI (find_best_center_match) to
-        // stay consistent with sync-status display. After updating, bind
-        // source_ref so future imports match by exact path.
+        let all_managed = store.get_all_skills()?;
+
         if let Some(existing) = find_best_center_match(skill, &all_managed) {
-            let result = installer::install_from_local_to_destination(
-                &source_path,
-                Some(&existing.name),
-                Path::new(&existing.central_path),
-            )
-            .map_err(AppError::io)?;
-            store
-                .update_skill_after_install(
-                    &existing.id,
-                    &existing.name,
-                    result.description.as_deref(),
-                    existing.source_revision.as_deref(),
-                    existing.remote_revision.as_deref(),
-                    Some(&result.content_hash),
-                    "local_only",
-                )
-                .map_err(AppError::db)?;
+            // Replace in place under the user root. Prefer the directory
+            // component already stored when it lives under the root so the
+            // record's central_path stays stable; otherwise target under
+            // root by the project directory name (V1: all managed writes
+            // land in `~/.agents/skills`).
+            let central = Path::new(&existing.central_path);
+            let dir_name = if central.starts_with(&root.root) {
+                central
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| existing.name.clone())
+            } else {
+                skill.dir_name.clone()
+            };
+            let installed =
+                canonical::install_skill_dir_as(&source_path, &root, &dir_name, true)?;
+            let hash = content_hash::hash_directory(&installed).map_err(AppError::io)?;
+            let meta = skill_metadata::parse_skill_md(&installed);
+            store.update_skill_after_install(
+                &existing.id,
+                &existing.name,
+                meta.description.as_deref(),
+                existing.source_revision.as_deref(),
+                existing.remote_revision.as_deref(),
+                Some(&hash),
+                "local_only",
+            )?;
+            let new_path = installed.display().to_string();
+            if existing.central_path != new_path {
+                store.update_skill_central_path(&existing.id, &new_path, Some(&hash))?;
+            }
             // Only update source_ref when the match was already by source_ref
             // path (not by hash or name). This avoids permanently rebinding
             // unrelated center skills that merely share a name or content.
@@ -964,46 +869,35 @@ pub async fn import_project_skill_to_center(
                 existing,
             );
             if existing.source_type == "local" && already_matched_by_ref {
-                store
-                    .update_skill_source_ref(&existing.id, &skill.path)
-                    .map_err(AppError::db)?;
+                store.update_skill_source_ref(&existing.id, &skill.path)?;
             }
+            sync_metadata::write_all_from_db_unlocked(store)?;
             return Ok(());
         }
 
-        let result =
-            installer::install_from_local(&source_path, Some(&skill.name)).map_err(AppError::io)?;
-
-        let now = chrono::Utc::now().timestamp_millis();
-        let id = uuid::Uuid::new_v4().to_string();
-
-        let skill_record = SkillRecord {
-            id: id.clone(),
-            name: result.name.clone(),
-            description: result.description.clone(),
-            source_type: "local".to_string(),
-            source_ref: Some(skill.path.clone()),
-            source_ref_resolved: None,
-            source_subpath: None,
-            source_branch: None,
-            source_revision: None,
-            remote_revision: None,
-            central_path: result.central_path.to_string_lossy().to_string(),
-            content_hash: Some(result.content_hash.clone()),
-            enabled: true,
-            created_at: now,
-            updated_at: now,
-            status: "ok".to_string(),
-            update_status: "local_only".to_string(),
-            last_checked_at: Some(now),
-            last_check_error: None,
-        };
-
-        store.insert_skill(&skill_record).map_err(AppError::db)?;
-
+        let clean = canonical::sanitize_component(&skill.dir_name)?;
+        let installed = canonical::install_skill_dir_as(&source_path, &root, &clean, false)?;
+        let hash = content_hash::hash_directory(&installed).map_err(AppError::io)?;
+        let meta = skill_metadata::parse_skill_md(&installed);
+        let name = installed
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| clean.clone());
+        canonical::register_user_skill(
+            store,
+            &canonical::UserSkillRegistration {
+                name,
+                description: meta.description,
+                central_path: installed,
+                content_hash: hash,
+                source_type: "local".to_string(),
+                source_ref: Some(skill.path.clone()),
+            },
+        )
+        .map_err(anyhow::Error::from)?;
         Ok(())
     })
-    .await?
+    .map_err(AppError::db)
 }
 
 #[tauri::command]
@@ -1011,9 +905,8 @@ pub async fn update_project_skill_to_center(
     store: State<'_, Arc<SkillStore>>,
     project_id: String,
     skill_relative_path: String,
-    agent: String,
 ) -> Result<(), AppError> {
-    import_project_skill_to_center(store, project_id, skill_relative_path, agent).await
+    import_project_skill_to_center(store, project_id, skill_relative_path).await
 }
 
 #[tauri::command]
@@ -1026,9 +919,7 @@ pub async fn export_skill_to_project(
     store: State<'_, Arc<SkillStore>>,
     skill_id: String,
     project_id: String,
-    agents: Option<Vec<String>>,
 ) -> Result<(), AppError> {
-    let _ = agents;
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let skill = store
@@ -1050,7 +941,6 @@ pub async fn update_project_skill_from_center(
     store: State<'_, Arc<SkillStore>>,
     project_id: String,
     skill_relative_path: String,
-    agent: String,
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -1065,7 +955,7 @@ pub async fn update_project_skill_from_center(
         let skills = read_workspace_skills(&record, &configs);
         let skill = skills
             .iter()
-            .find(|s| s.relative_path == skill_relative_path && s.agent == agent)
+            .find(|s| s.relative_path == skill_relative_path)
             .ok_or_else(|| AppError::not_found("Skill not found in workspace"))?;
 
         let all_managed = store.get_all_skills().unwrap_or_default();
@@ -1080,18 +970,10 @@ pub async fn update_project_skill_from_center(
             ));
         }
 
-        let (skills_root, disabled_root) = resolve_agent_skills_roots(&store, &record, &agent)
-            .ok_or_else(|| AppError::not_found(format!("Unknown agent: {}", agent)))?;
+        let (skills_root, _) = resolve_canonical_skills_roots(&record);
         let target_path = PathBuf::from(&skill.path);
         if target_path.starts_with(&skills_root) {
             ensure_dir_within_root(&target_path, &skills_root)?;
-        } else if disabled_root
-            .as_ref()
-            .map(|root| target_path.starts_with(root))
-            .unwrap_or(false)
-        {
-            let disabled_root = disabled_root.expect("checked above");
-            ensure_dir_within_root(&target_path, &disabled_root)?;
         } else {
             return Err(AppError::invalid_input("Invalid skill directory path"));
         }
@@ -1120,7 +1002,6 @@ pub async fn toggle_project_skill(
     _store: State<'_, Arc<SkillStore>>,
     _project_id: String,
     _skill_relative_path: String,
-    _agent: String,
     _enabled: bool,
 ) -> Result<(), AppError> {
     Err(crate::core::v1::blocked_write())
@@ -1131,9 +1012,7 @@ pub async fn delete_project_skill(
     store: State<'_, Arc<SkillStore>>,
     project_id: String,
     skill_relative_path: String,
-    agent: String,
 ) -> Result<(), AppError> {
-    let _ = agent;
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         // Backend-resolved canonical project root; the relative path is
@@ -1150,14 +1029,17 @@ pub async fn delete_project_skill(
 mod tests {
     use super::{
         classify_sync_status, ensure_distinct_linked_workspace_roots, find_best_center_match,
-        project_to_dto, remove_workspace_skill_target, set_project_skill_enabled_state,
+        import_project_skill_info, import_project_skill_to_center_blocking, project_to_dto,
+        remove_workspace_skill_target, set_project_skill_enabled_state,
     };
     use crate::core::content_hash;
     use crate::core::error::ErrorKind;
     use crate::core::project_scanner::{AgentSkillConfig, ProjectSkillInfo};
-    use crate::core::skill_store::{ProjectRecord, SkillRecord};
+    use crate::core::skill_store::{ProjectRecord, SkillRecord, SkillStore};
     use std::fs;
-    use tempfile::tempdir;
+    use std::path::{Path, PathBuf};
+    use std::sync::MutexGuard;
+    use tempfile::{TempDir, tempdir};
 
     fn sample_managed_skill(
         central_path: String,
@@ -1368,12 +1250,9 @@ mod tests {
     fn project_to_dto_counts_logical_skills_not_agent_copies() {
         let tmp = tempdir().unwrap();
         let project_path = tmp.path().join("project");
-        let claude_skill = project_path.join(".claude/skills/shared-skill");
-        let codex_skill = project_path.join(".codex/skills/shared-skill");
-        fs::create_dir_all(&claude_skill).unwrap();
-        fs::create_dir_all(&codex_skill).unwrap();
-        fs::write(claude_skill.join("SKILL.md"), "# Shared\n").unwrap();
-        fs::write(codex_skill.join("SKILL.md"), "# Shared\n").unwrap();
+        let canonical_skill = project_path.join(".agents/skills/shared-skill");
+        fs::create_dir_all(&canonical_skill).unwrap();
+        fs::write(canonical_skill.join("SKILL.md"), "# Shared\n").unwrap();
 
         let record = ProjectRecord {
             id: "project-1".to_string(),
@@ -1738,5 +1617,197 @@ mod tests {
         assert_eq!(err.kind, ErrorKind::InvalidInput);
         assert!(real_enabled.join("SKILL.md").exists());
         assert!(real_disabled.join("SKILL.md").exists());
+    }
+
+    /// Redirects `base_dir` + `skills_dir` into a temp tree so import tests
+    /// never touch the real `~/.agents/skills` or `~/.skills-manager`.
+    struct IsolatedImportBase {
+        _guard: MutexGuard<'static, ()>,
+        _tmp: TempDir,
+        base: PathBuf,
+        user_skills: PathBuf,
+    }
+
+    impl Drop for IsolatedImportBase {
+        fn drop(&mut self) {
+            crate::core::central_repo::set_runtime_skills_dir_override(None);
+            crate::core::central_repo::set_test_base_dir_override(None);
+        }
+    }
+
+    fn isolated_import_base() -> IsolatedImportBase {
+        let guard = crate::core::central_repo::test_base_dir_lock();
+        let tmp = tempdir().unwrap();
+        let base = tmp.path().join("repo");
+        // Base first: `set_test_base_dir_override` clears the skills override.
+        crate::core::central_repo::set_test_base_dir_override(Some(base.clone()));
+        let user_skills = tmp.path().join("user-skills");
+        crate::core::central_repo::set_runtime_skills_dir_override(Some(user_skills.clone()));
+        // SkillStore opens the DB under `base`; parent must exist.
+        std::fs::create_dir_all(&base).unwrap();
+        IsolatedImportBase {
+            _guard: guard,
+            _tmp: tmp,
+            base,
+            user_skills,
+        }
+    }
+
+    fn project_skill_info(
+        path: &Path,
+        dir_name: &str,
+        content_hash: Option<String>,
+    ) -> ProjectSkillInfo {
+        ProjectSkillInfo {
+            name: dir_name.to_string(),
+            dir_name: dir_name.to_string(),
+            relative_path: dir_name.to_string(),
+            description: None,
+            path: path.to_string_lossy().to_string(),
+            files: Vec::new(),
+            enabled: true,
+            agent: "agents".to_string(),
+            agent_display_name: "Project".to_string(),
+            tags: Vec::new(),
+            in_center: false,
+            sync_status: "project_only".to_string(),
+            center_skill_id: None,
+            last_modified_at: None,
+            content_hash,
+        }
+    }
+
+    fn insert_local_skill(store: &SkillStore, central_path: &Path, source_ref: &str) -> SkillRecord {
+        let hash = content_hash::hash_directory(central_path).unwrap();
+        let skill = SkillRecord {
+            id: "existing-1".to_string(),
+            name: "demo".to_string(),
+            description: Some("original".to_string()),
+            source_type: "local".to_string(),
+            source_ref: Some(source_ref.to_string()),
+            source_ref_resolved: None,
+            source_subpath: None,
+            source_branch: None,
+            source_revision: None,
+            remote_revision: None,
+            central_path: central_path.to_string_lossy().to_string(),
+            content_hash: Some(hash),
+            enabled: true,
+            created_at: 1,
+            updated_at: 1,
+            status: "ok".to_string(),
+            update_status: "local_only".to_string(),
+            last_checked_at: None,
+            last_check_error: None,
+        };
+        store.insert_skill(&skill).unwrap();
+        skill
+    }
+
+    /// A failed replace must leave the existing User skill byte-identical:
+    /// `install_skill_dir_as` validates the source before touching dest.
+    #[test]
+    fn import_existing_replace_failure_keeps_original_user_skill() {
+        let iso = isolated_import_base();
+        let store = SkillStore::new(&iso.base.join("test.db")).unwrap();
+
+        // Seed the managed User skill under the skills override root.
+        let original = iso.user_skills.join("demo");
+        fs::create_dir_all(&original).unwrap();
+        fs::write(
+            original.join("SKILL.md"),
+            "---\nname: demo\n---\noriginal\n",
+        )
+        .unwrap();
+
+        // Project-side source matches by source_ref but has no SKILL.md.
+        let project_src = iso.base.join("project-src").join("demo");
+        fs::create_dir_all(&project_src).unwrap();
+        // Intentionally no SKILL.md — install must fail before replacing.
+
+        let seed = insert_local_skill(&store, &original, &project_src.to_string_lossy());
+        let skill = project_skill_info(&project_src, "demo", None);
+
+        // Match is by source_ref, so the existing row is the replace target.
+        assert!(find_best_center_match(&skill, std::slice::from_ref(&seed)).is_some());
+
+        let err = import_project_skill_info(&store, &skill).unwrap_err();
+        // `with_repo_lock` flattens AppError → anyhow → AppError::db; assert
+        // the install was refused, not the mapped kind.
+        assert!(
+            err.message.contains("SKILL.md") || matches!(err.kind, ErrorKind::InvalidInput | ErrorKind::Database),
+            "unexpected error: {err:?}"
+        );
+
+        // Original directory and DB row are untouched.
+        let kept = fs::read_to_string(original.join("SKILL.md")).unwrap();
+        assert!(kept.contains("original"));
+        let after = store.get_skill_by_id(&seed.id).unwrap().unwrap();
+        assert_eq!(after.content_hash, seed.content_hash);
+        assert_eq!(after.central_path, seed.central_path);
+        assert_eq!(after.name, seed.name);
+        assert_eq!(store.get_all_skills().unwrap().len(), 1);
+    }
+
+    /// New project skill imports only under the user skills root and create
+    /// exactly one SkillStore record — never the legacy `base/skills` path.
+    #[test]
+    fn import_new_project_skill_lands_only_under_user_root() {
+        let iso = isolated_import_base();
+        let store = SkillStore::new(&iso.base.join("test.db")).unwrap();
+
+        let project_path = iso.base.join("project");
+        let skill_dir = project_path.join(".agents").join("skills").join("foo");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: foo\n---\nbody\n",
+        )
+        .unwrap();
+
+        store
+            .insert_project(&ProjectRecord {
+                id: "p1".to_string(),
+                name: "Project".to_string(),
+                path: project_path.to_string_lossy().to_string(),
+                workspace_type: "project".to_string(),
+                linked_agent_key: None,
+                linked_agent_name: None,
+                disabled_path: None,
+                sort_order: 0,
+                created_at: 0,
+                updated_at: 0,
+            })
+            .unwrap();
+
+        import_project_skill_to_center_blocking(&store, "p1", "foo").unwrap();
+
+        let dest = iso.user_skills.join("foo");
+        assert!(
+            dest.join("SKILL.md").is_file(),
+            "skill must land under the skills-dir override root"
+        );
+        assert!(
+            !iso.base.join("skills").join("foo").exists(),
+            "legacy base/skills must not receive the import"
+        );
+
+        let skills = store.get_all_skills().unwrap();
+        assert_eq!(skills.len(), 1, "exactly one SkillStore record");
+        let record = &skills[0];
+        assert_eq!(record.name, "foo");
+        assert_eq!(
+            Path::new(&record.central_path),
+            dest.as_path(),
+            "central_path must point at the user root copy"
+        );
+        assert_eq!(record.source_type, "local");
+        let source_ref = record.source_ref.as_deref().unwrap_or_default();
+        assert_eq!(
+            crate::core::paths::identity_key(Path::new(source_ref)),
+            crate::core::paths::identity_key(&skill_dir),
+            "source_ref must point at the project skill"
+        );
+        assert!(record.content_hash.is_some());
     }
 }

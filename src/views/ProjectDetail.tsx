@@ -18,8 +18,6 @@ import {
   Square,
   Plus,
   CircleSlash,
-  CheckCircle2,
-  Circle,
   Tag,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -30,21 +28,14 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { MultiSelectToolbar } from "../components/MultiSelectToolbar";
 import { BatchTagDialog } from "../components/BatchTagDialog";
 import { DetailSheet } from "../components/DetailSheet";
-import { AgentToggleSection, type AgentToggleItem } from "../components/AgentToggleSection";
-import { ToggleSwitch } from "../components/ToggleSwitch";
-import { ProjectAgentDots } from "../components/ProjectAgentDots";
-import { PresetBar } from "../components/PresetBar";
 import { SkillMarkdown } from "../components/SkillMarkdown";
 import { DocumentDiffViewer } from "../components/DocumentDiffViewer";
 import { getTagActiveColor, getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
-import { enabledInstalledAgentKeys, getDefaultExportAgents } from "../lib/exportAgents";
 import { cn } from "../utils";
 import * as api from "../lib/tauri";
-import type { ProjectSkill, ManagedSkill, ProjectAgentTarget } from "../lib/tauri";
+import type { ProjectSkill, ManagedSkill } from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
 import { AddSkillsSheet } from "../components/AddSkillsSheet";
-const projectLastUsedAgentsKey = (projectId: string) =>
-  `project_last_used_export_agents:${projectId}`;
 
 interface ProjectSkillGroup {
   id: string;
@@ -92,22 +83,6 @@ function getSyncStatusMeta(t: (key: string) => string, status: ProjectSkill["syn
   }
 }
 
-function getAssignedAgents(variants: ProjectSkill[]) {
-  return Array.from(new Set(variants.map((variant) => variant.agent))).sort();
-}
-
-function getAgentDotTargets(variants: ProjectSkill[]) {
-  const seen = new Set<string>();
-  const targets: { key: string; display_name: string }[] = [];
-  for (const v of variants) {
-    if (!seen.has(v.agent)) {
-      seen.add(v.agent);
-      targets.push({ key: v.agent, display_name: v.agent_display_name });
-    }
-  }
-  return targets;
-}
-
 function getGroupStatus(variants: ProjectSkill[]): ProjectSkill["sync_status"] {
   const priority: ProjectSkill["sync_status"][] = [
     "diverged",
@@ -128,9 +103,8 @@ export function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { t } = useTranslation();
-  const { projects, presets, managedSkills, refreshManagedSkills, refreshPresets, refreshProjects } = useApp();
+  const { projects, managedSkills, refreshManagedSkills, refreshPresets, refreshProjects } = useApp();
   const [skills, setSkills] = useState<ProjectSkill[]>([]);
-  const [projectAgentTargets, setProjectAgentTargets] = useState<ProjectAgentTarget[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [filterMode, setFilterMode] = useState<"all" | "enabled" | "disabled">("all");
@@ -145,13 +119,10 @@ export function ProjectDetail() {
   const [updatingProjectSkill, setUpdatingProjectSkill] = useState<string | null>(null);
   const [batchUpdatingCenter, setBatchUpdatingCenter] = useState(false);
   const [batchUpdatingProject, setBatchUpdatingProject] = useState(false);
-  const [togglingSkill, setTogglingSkill] = useState<string | null>(null);
-  const [togglingAgentTarget, setTogglingAgentTarget] = useState<{ skillKey: string; agent: string } | null>(null);
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ProjectSkillGroup | null>(null);
   const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false);
   const [batchTagDialogOpen, setBatchTagDialogOpen] = useState(false);
-  const [batchToggling, setBatchToggling] = useState(false);
   const PROJECT_ADD_CALLOUT_KEY = "skills-manager.projectAddCalloutDismissed";
   const [showAddCallout, setShowAddCallout] = useState(() => {
     try {
@@ -204,25 +175,6 @@ export function ProjectDetail() {
     setDetailSkill(null);
     setDocContent(null);
     setCenterDocContent(null);
-  }, [id]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const loadProjectAgentTargets = async () => {
-      if (!id) return;
-      try {
-        const result = await api.getProjectAgentTargets(id);
-        if (!cancelled) {
-          setProjectAgentTargets(result);
-        }
-      } catch (e) {
-        console.error("Failed to load project agent targets:", e);
-      }
-    };
-    loadProjectAgentTargets();
-    return () => {
-      cancelled = true;
-    };
   }, [id]);
 
   useEffect(() => {
@@ -313,7 +265,6 @@ export function ProjectDetail() {
     selectedIds,
     toggleSelect,
     isAllSelected,
-    anyDisabled,
     handleSelectAll,
     exitMultiSelect,
   } = useMultiSelect({
@@ -326,109 +277,15 @@ export function ProjectDetail() {
     escapeEnabled: !batchTagDialogOpen && !batchDeleteConfirm,
   });
 
-  const exportTargets = useMemo(() => {
-    if (projectAgentTargets.length > 0) return projectAgentTargets;
-    return [{ key: "claude_code", display_name: "Claude Code", enabled: true, installed: true, is_custom: false }];
-  }, [projectAgentTargets]);
-
-  const projectSkillDirNamesByAgent = useMemo(() => {
-    const map: Record<string, string[]> = {};
-    for (const skill of skills) {
-      if (!map[skill.agent]) {
-        map[skill.agent] = [];
-      }
-      map[skill.agent].push(skill.relative_path.toLowerCase());
-    }
-    return map;
+  const projectSkillDirNames = useMemo(() => {
+    return skills.map((skill) => skill.relative_path.toLowerCase());
   }, [skills]);
 
-  const projectCenterSkillIdsByAgent = useMemo(() => {
-    const map: Record<string, string[]> = {};
-    for (const skill of skills) {
-      if (!skill.center_skill_id) continue;
-      if (!map[skill.agent]) {
-        map[skill.agent] = [];
-      }
-      map[skill.agent].push(skill.center_skill_id);
-    }
-    return map;
+  const projectCenterSkillIds = useMemo(() => {
+    return skills
+      .map((skill) => skill.center_skill_id)
+      .filter((id): id is string => !!id);
   }, [skills]);
-
-  const projectPresetVariants = useMemo(() => {
-    const map = new Map<string, ProjectSkill>();
-    for (const skill of skills) {
-      if (!skill.center_skill_id) continue;
-      map.set(`${skill.center_skill_id}::${skill.agent}`, skill);
-    }
-    return map;
-  }, [skills]);
-
-  const findProjectPresetVariant = useCallback(
-    (skill: ManagedSkill, agentKey: string) =>
-      projectPresetVariants.get(`${skill.id}::${agentKey}`) ?? null,
-    [projectPresetVariants]
-  );
-
-  const selectedExportAgents = useMemo(() => getDefaultExportAgents(exportTargets), [exportTargets]);
-
-  const [lastUsedExportAgents, setLastUsedExportAgents] = useState<string[] | null>(null);
-  useEffect(() => {
-    if (!id) return;
-    let cancelled = false;
-    api.getSettings(projectLastUsedAgentsKey(id))
-      .then((raw) => {
-        if (cancelled) return;
-        if (!raw) {
-          setLastUsedExportAgents(null);
-          return;
-        }
-        try {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed)) {
-            setLastUsedExportAgents(parsed.filter((x): x is string => typeof x === "string"));
-            return;
-          }
-        } catch {
-          // fall through
-        }
-        setLastUsedExportAgents(null);
-      })
-      .catch(() => {
-        if (!cancelled) setLastUsedExportAgents(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [id]);
-
-  const handlePersistLastUsedAgents = useCallback(
-    (agents: string[]) => {
-      setLastUsedExportAgents(agents);
-      if (id) {
-        void api.setSettings(projectLastUsedAgentsKey(id), JSON.stringify(agents)).catch(() => {});
-      }
-    },
-    [id],
-  );
-
-  const initialSheetAgents = useMemo(() => {
-    const availableKeys = new Set(enabledInstalledAgentKeys(exportTargets));
-    if (lastUsedExportAgents && lastUsedExportAgents.length > 0) {
-      const filtered = lastUsedExportAgents.filter((k) => availableKeys.has(k));
-      if (filtered.length > 0) return filtered;
-    }
-    return selectedExportAgents.filter((k) => availableKeys.has(k));
-  }, [exportTargets, lastUsedExportAgents, selectedExportAgents]);
-
-  const presetBarAgentKeys = useMemo(() => {
-    // The real targets load asynchronously; until they arrive `exportTargets`
-    // stands in with a claude_code-only singleton. Applying a preset off that
-    // stand-in would deploy to Claude Code alone — the exact failure #400
-    // reported — so keep the bar out of the DOM until the targets are real.
-    if (projectAgentTargets.length === 0) return [];
-    const availableKeys = new Set(enabledInstalledAgentKeys(exportTargets));
-    return selectedExportAgents.filter((key) => availableKeys.has(key));
-  }, [exportTargets, projectAgentTargets, selectedExportAgents]);
 
   const enabledCount = groupedSkills.filter((s) => s.enabledCount > 0).length;
   const allTags = useMemo(() => {
@@ -484,14 +341,6 @@ export function ProjectDetail() {
     )).length,
     [selectedSkills]
   );
-  const togglableSelectedCount = useMemo(
-    () => selectedSkills.filter((skill) => (
-      anyDisabled
-        ? skill.enabledCount !== skill.totalCount
-        : skill.enabledCount > 0
-    )).length,
-    [selectedSkills, anyDisabled]
-  );
 
   const handleOpenDetail = async (skill: ProjectSkillGroup) => {
     setDetailSkill(skill);
@@ -514,8 +363,7 @@ export function ProjectDetail() {
     try {
       const doc = await api.getProjectSkillDocument(
         id,
-        skill.primaryVariant.relative_path,
-        skill.primaryVariant.agent
+        skill.primaryVariant.relative_path
       );
       setDocContent(doc.content);
     } catch {
@@ -540,6 +388,9 @@ export function ProjectDetail() {
   // to project", which overwrites every variant — and the backend refuses only
   // project_newer, so nothing stops it. Refuse and name the conflict instead,
   // the way 1.34.0 answers a write that would destroy something.
+  //
+  // V1: each group is one canonical row under <repo>/.agents/skills, so there
+  // is only ever one variant to push and no multi-variant conflict path.
   const pushSkillToCenterAndAlign = async (
     skill: ProjectSkillGroup
   ): Promise<{ alignFailed: number; conflicting: number }> => {
@@ -551,23 +402,10 @@ export function ProjectDetail() {
     }
 
     const winner = unproven[0] ?? skill.primaryVariant;
-    await api.updateProjectSkillToCenter(id, winner.relative_path, winner.agent);
+    await api.updateProjectSkillToCenter(id, winner.relative_path);
 
-    // Every remaining variant is in_sync, so pulling the freshly written center
-    // over it discards nothing — and it keeps a multi-agent group from flipping
-    // to "center_newer" off the stale-but-clean siblings right after the user
-    // updated *to* center. Serially: two agents' skills roots can be symlinks
-    // onto one real directory, and each realign removes and rebuilds its
-    // target, so concurrent calls on one path make a call fail for no reason.
-    let alignFailed = 0;
-    for (const variant of skill.variants.filter((v) => v !== winner)) {
-      try {
-        await api.updateProjectSkillFromCenter(id, variant.relative_path, variant.agent);
-      } catch {
-        alignFailed += 1;
-      }
-    }
-    return { alignFailed, conflicting: 0 };
+    // Single-row V1: no sibling variants remain to realign.
+    return { alignFailed: 0, conflicting: 0 };
   };
 
   const handleUpdateCenter = async (skill: ProjectSkillGroup) => {
@@ -600,7 +438,7 @@ export function ProjectDetail() {
     try {
       await Promise.all(
         skill.variants.map((variant) =>
-          api.updateProjectSkillFromCenter(id, variant.relative_path, variant.agent)
+          api.updateProjectSkillFromCenter(id, variant.relative_path)
         )
       );
       if (skill.status === "project_newer") {
@@ -616,65 +454,12 @@ export function ProjectDetail() {
     }
   };
 
-  const handleToggleSkill = async (skill: ProjectSkillGroup) => {
-    if (!id) return;
-    setTogglingSkill(getSkillKey(skill));
-    try {
-      const nextEnabled = skill.enabledCount !== skill.totalCount;
-      await Promise.all(
-        skill.variants.map((variant) =>
-          api.toggleProjectSkill(id, variant.relative_path, variant.agent, nextEnabled)
-        )
-      );
-      if (skill.enabledCount === skill.totalCount) {
-        toast.success(t("project.skillDisabled", { name: skill.name }));
-      } else {
-        toast.success(t("project.skillEnabled", { name: skill.name }));
-      }
-      await loadSkills();
-    } catch (error: unknown) {
-      toast.error(getErrorMessage(error, t("common.error")));
-    } finally {
-      setTogglingSkill(null);
-    }
-  };
-
-  const handleToggleDetailAgent = async (skill: ProjectSkillGroup, agentKey: string, enabled: boolean) => {
-    if (!id) return;
-    if (togglingAgentTarget) return;
-    const target = exportTargets.find((item) => item.key === agentKey);
-    const displayName = target?.display_name ?? agentKey;
-    const existingVariant = skill.variants.find((variant) => variant.agent === agentKey);
-
-    setTogglingAgentTarget({ skillKey: getSkillKey(skill), agent: agentKey });
-    try {
-      if (enabled) {
-        const centerSkillId = skill.centerSkillIds[0];
-        if (!centerSkillId) {
-          toast.error(t("project.agentAddRequiresCenter", { agent: displayName }));
-          return;
-        }
-        await api.exportSkillToProject(centerSkillId, id, [agentKey]);
-        toast.success(t("project.agentAdded", { agent: displayName, name: skill.name }));
-      } else {
-        if (!existingVariant) return;
-        await api.deleteProjectSkill(id, existingVariant.relative_path, agentKey);
-        toast.success(t("project.agentRemoved", { agent: displayName, name: skill.name }));
-      }
-      await Promise.all([loadSkills(), refreshProjects()]);
-    } catch (error: unknown) {
-      toast.error(getErrorMessage(error, t("common.error")));
-    } finally {
-      setTogglingAgentTarget(null);
-    }
-  };
-
   const handleDeleteSkill = async () => {
     if (!id || !deleteTarget) return;
     try {
       await Promise.all(
         deleteTarget.variants.map((variant) =>
-          api.deleteProjectSkill(id, variant.relative_path, variant.agent)
+          api.deleteProjectSkill(id, variant.relative_path)
         )
       );
       toast.success(t("project.skillDeleted", { name: deleteTarget.name }));
@@ -692,7 +477,7 @@ export function ProjectDetail() {
       try {
         await Promise.all(
           skill.variants.map((variant) =>
-            api.deleteProjectSkill(id, variant.relative_path, variant.agent)
+            api.deleteProjectSkill(id, variant.relative_path)
           )
         );
         deleted++;
@@ -710,49 +495,6 @@ export function ProjectDetail() {
     exitMultiSelect();
     setBatchDeleteConfirm(false);
     await Promise.all([loadSkills(), refreshProjects()]);
-  };
-
-  const handleBatchToggleProject = async () => {
-    if (!id || batchToggling) return;
-    const enabling = anyDisabled;
-    let count = 0;
-    let failed = 0;
-    setBatchToggling(true);
-    try {
-      for (const skill of selectedSkills) {
-        try {
-          if (enabling && skill.enabledCount !== skill.totalCount) {
-            await Promise.all(
-              skill.variants.map((variant) =>
-                api.toggleProjectSkill(id, variant.relative_path, variant.agent, true)
-              )
-            );
-            count++;
-          } else if (!enabling && skill.enabledCount > 0) {
-            await Promise.all(
-              skill.variants.map((variant) =>
-                api.toggleProjectSkill(id, variant.relative_path, variant.agent, false)
-              )
-            );
-            count++;
-          }
-        } catch {
-          failed++;
-          // continue with remaining
-        }
-      }
-      if (count > 0) {
-        toast.success(enabling
-          ? t("project.batchEnabled", { count })
-          : t("project.batchDisabled", { count }));
-      }
-      if (failed > 0) {
-        toast.error(t("project.batchToggleFailed", { count: failed }));
-      }
-      await loadSkills();
-    } finally {
-      setBatchToggling(false);
-    }
   };
 
   const handleBatchUpdateCenter = async () => {
@@ -816,7 +558,7 @@ export function ProjectDetail() {
         try {
           await Promise.all(
             skill.variants.map((variant) =>
-              api.updateProjectSkillFromCenter(id, variant.relative_path, variant.agent)
+              api.updateProjectSkillFromCenter(id, variant.relative_path)
             )
           );
           updated++;
@@ -867,35 +609,6 @@ export function ProjectDetail() {
     }
     await Promise.all([refreshManagedSkills(), loadSkills()]);
   };
-
-  const presetSkillExistsInProject = useCallback(
-    (skill: ManagedSkill, agentKey: string) => {
-      return findProjectPresetVariant(skill, agentKey) !== null;
-    },
-    [findProjectPresetVariant]
-  );
-
-  const handleAddPresetSkillToProject = useCallback(
-    async (skill: ManagedSkill, agentKey: string) => {
-      if (!id) return;
-      await api.exportSkillToProject(skill.id, id, [agentKey]);
-    },
-    [id]
-  );
-
-  const handleRemovePresetSkillFromProject = useCallback(
-    async (skill: ManagedSkill, agentKey: string) => {
-      if (!id) return;
-      const projectVariant = findProjectPresetVariant(skill, agentKey);
-      if (!projectVariant) throw new Error(t("project.skillDirectoryNotFound"));
-      await api.deleteProjectSkill(id, projectVariant.relative_path, agentKey);
-    },
-    [findProjectPresetVariant, id, t]
-  );
-
-  const handlePresetActionComplete = useCallback(async () => {
-    await Promise.all([loadSkills(), refreshProjects()]);
-  }, [loadSkills, refreshProjects]);
 
   if (!project) return null;
 
@@ -1077,20 +790,6 @@ export function ProjectDetail() {
             })}
           </div>
         )}
-
-        {/* Preset bar */}
-        {presets.length > 0 && presetBarAgentKeys.length > 0 && (
-          <PresetBar
-            presets={presets}
-            managedSkills={managedSkills}
-            agentKeys={presetBarAgentKeys}
-            statusMode="logical-skill"
-            existsInWorkspace={presetSkillExistsInProject}
-            onAddSkill={handleAddPresetSkillToProject}
-            onRemoveSkill={handleRemovePresetSkillFromProject}
-            onComplete={handlePresetActionComplete}
-          />
-        )}
       </div>
 
       {isMultiSelect && (
@@ -1098,20 +797,6 @@ export function ProjectDetail() {
           selectedCount={selectedIds.size}
           isAllSelected={isAllSelected}
           actions={[
-            ...(project.supports_skill_toggle && togglableSelectedCount > 0
-              ? [{
-                  key: "toggle",
-                  tone: "primary" as const,
-                  label: anyDisabled
-                    ? t("project.batchEnable", { count: togglableSelectedCount })
-                    : t("project.batchDisable", { count: togglableSelectedCount }),
-                  icon: anyDisabled
-                    ? <CheckCircle2 className="h-3.5 w-3.5" />
-                    : <Circle className="h-3.5 w-3.5" />,
-                  busy: batchToggling,
-                  onSelect: handleBatchToggleProject,
-                }]
-              : []),
             ...(updatableProjectCount > 0
               ? [{
                   key: "update-project",
@@ -1201,7 +886,6 @@ export function ProjectDetail() {
             const isSelected = selectedIds.has(skillKey);
             const isUpdatingCenter = updatingCenterSkill === skillKey;
             const isUpdatingProject = updatingProjectSkill === skillKey;
-            const isToggling = togglingSkill === skillKey;
             const canUpdateCenter =
               skill.status === "project_only" ||
               skill.status === "project_newer" ||
@@ -1211,7 +895,6 @@ export function ProjectDetail() {
               skill.status === "center_newer" ||
               skill.status === "diverged";
             const statusMeta = getSyncStatusMeta(t, skill.status);
-            const assignedAgents = getAssignedAgents(skill.variants);
 
             if (viewMode === "grid") {
               return (
@@ -1294,18 +977,6 @@ export function ProjectDetail() {
                     </div>
                     {!isMultiSelect && (
                       <div className="flex items-center gap-1.5 shrink-0">
-                        <ProjectAgentDots
-                          assignedAgents={assignedAgents}
-                          targets={exportTargets}
-                          limit={4}
-                          size="sm"
-                          onToggle={(agentKey, enabled) => handleToggleDetailAgent(skill, agentKey, enabled)}
-                          pendingKey={
-                            togglingAgentTarget?.skillKey === skillKey
-                              ? togglingAgentTarget.agent
-                              : null
-                          }
-                        />
                         {canUpdateCenter && (
                           <button
                             onClick={(e) => { e.stopPropagation(); handleUpdateCenter(skill); }}
@@ -1337,21 +1008,9 @@ export function ProjectDetail() {
                               <RotateCcw className="h-3.5 w-3.5" />
                             ) : (
                               <Download className="h-3.5 w-3.5" />
-                            )}
+                              )}
                           </button>
                         )}
-                        {project.supports_skill_toggle ? (
-                          <ToggleSwitch
-                            checked={skill.enabledCount === skill.totalCount}
-                            loading={isToggling}
-                            onChange={() => handleToggleSkill(skill)}
-                            title={
-                              skill.enabledCount === skill.totalCount
-                                ? t("project.enabled")
-                                : t("project.enableSkill")
-                            }
-                          />
-                        ) : null}
                         <button
                           onClick={(e) => { e.stopPropagation(); setDeleteTarget(skill); }}
                           className="rounded px-2 py-1 text-muted transition-colors outline-none hover:bg-red-500/10 hover:text-red-500"
@@ -1439,22 +1098,6 @@ export function ProjectDetail() {
                       {skill.files.length}
                     </span>
                   )}
-                  <ProjectAgentDots
-                    assignedAgents={assignedAgents}
-                    targets={exportTargets}
-                    limit={4}
-                    size="sm"
-                    onToggle={
-                      isMultiSelect
-                        ? undefined
-                        : (agentKey, enabled) => handleToggleDetailAgent(skill, agentKey, enabled)
-                    }
-                    pendingKey={
-                      togglingAgentTarget?.skillKey === skillKey
-                        ? togglingAgentTarget.agent
-                        : null
-                    }
-                  />
                 </div>
 
                 {!isMultiSelect && (
@@ -1495,18 +1138,6 @@ export function ProjectDetail() {
                         </button>
                       )}
                     </div>
-                    {project.supports_skill_toggle ? (
-                      <ToggleSwitch
-                        checked={skill.enabledCount === skill.totalCount}
-                        loading={isToggling}
-                        onChange={() => handleToggleSkill(skill)}
-                        title={
-                          skill.enabledCount === skill.totalCount
-                            ? t("project.enabled")
-                            : t("project.enableSkill")
-                        }
-                      />
-                    ) : null}
                     <button
                       onClick={(e) => { e.stopPropagation(); setDeleteTarget(skill); }}
                       className="shrink-0 rounded p-0.5 text-muted transition-colors hover:bg-red-500/10 hover:text-red-500"
@@ -1526,13 +1157,6 @@ export function ProjectDetail() {
       {detailSkill && project && (
         <ProjectSkillDetailPanel
           skill={detailSkill}
-          targets={exportTargets}
-          togglingAgent={
-            togglingAgentTarget?.skillKey === getSkillKey(detailSkill)
-              ? togglingAgentTarget.agent
-              : null
-          }
-          onToggleAgent={(agentKey, enabled) => handleToggleDetailAgent(detailSkill, agentKey, enabled)}
           docContent={docContent}
           docLoading={docLoading}
           centerDocContent={centerDocContent}
@@ -1578,11 +1202,8 @@ export function ProjectDetail() {
             kind: "project",
             projectId: id,
             projectName: project?.name ?? "",
-            exportTargets,
-            projectSkillDirNamesByAgent,
-            projectCenterSkillIdsByAgent,
-            initialSelectedAgents: initialSheetAgents,
-            onPersistLastUsed: handlePersistLastUsedAgents,
+            projectSkillDirNames,
+            projectCenterSkillIds,
           }}
           managedSkills={managedSkills}
           onInstalled={async () => {
@@ -1596,9 +1217,6 @@ export function ProjectDetail() {
 
 function ProjectSkillDetailPanel({
   skill,
-  targets,
-  togglingAgent,
-  onToggleAgent,
   docContent,
   docLoading,
   centerDocContent,
@@ -1606,9 +1224,6 @@ function ProjectSkillDetailPanel({
   onClose,
 }: {
   skill: ProjectSkillGroup;
-  targets: ProjectAgentTarget[];
-  togglingAgent: string | null;
-  onToggleAgent: (agentKey: string, enabled: boolean) => void;
   docContent: string | null;
   docLoading: boolean;
   centerDocContent: string | null;
@@ -1618,36 +1233,9 @@ function ProjectSkillDetailPanel({
   const { t } = useTranslation();
   const [contentTab, setContentTab] = useState<"local" | "diff" | "center">("local");
   const supportsCenterDiff = skill.centerSkillIds.length > 0;
-  const toggleItems: AgentToggleItem[] = targets.map((target) => {
-    const variant = skill.variants.find((item) => item.agent === target.key);
-    return {
-      key: target.key,
-      displayName: target.display_name,
-      enabled: Boolean(variant),
-      isAvailable: target.installed && target.enabled,
-      disabled: (!variant && (!target.installed || !target.enabled)),
-      badgeLabel: !target.installed
-        ? t("mySkills.agentToggleNotInstalled")
-        : !target.enabled
-          ? t("mySkills.agentToggleDisabledGlobally")
-          : variant && !variant.enabled
-            ? t("project.disabled")
-            : null,
-    };
-  });
   const meta = (
     <>
       <div className="flex flex-wrap items-center gap-2 text-[12.5px] text-muted">
-        <ProjectAgentDots
-          assignedAgents={getAssignedAgents(skill.variants)}
-          targets={getAgentDotTargets(skill.variants).map((t) => ({
-            key: t.key,
-            display_name: t.display_name,
-            enabled: true,
-            installed: true,
-            is_custom: false,
-          }))}
-        />
         {skill.tags.length > 0 && (
           <>
             <span className="mx-0.5 h-3 w-px bg-border-subtle" />
@@ -1685,13 +1273,6 @@ function ProjectSkillDetailPanel({
       meta={meta}
       onClose={onClose}
     >
-      <AgentToggleSection
-        items={toggleItems}
-        togglingKey={togglingAgent}
-        onToggle={onToggleAgent}
-        className="mb-4"
-      />
-
       {supportsCenterDiff && (
         <div className="mb-4 flex flex-wrap items-center gap-2">
           {(["local", "diff", "center"] as const).map((tab) => (

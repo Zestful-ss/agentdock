@@ -18,13 +18,11 @@ import {
   type SkillDocument,
   type SourceSkillDocument,
   type SkillSourceDiff,
-  type SkillToolToggle,
   type ToolInfo,
 } from "../lib/tauri";
 import { SkillSourceDiffViewer } from "./SkillSourceDiffViewer";
 import { DetailSheet } from "./DetailSheet";
 import { SkillMarkdown } from "./SkillMarkdown";
-import { AgentToggleSection, type AgentToggleItem } from "./AgentToggleSection";
 import { SkillProjectsSection } from "./SkillProjectsSection";
 import { SyncDots } from "./SyncDots";
 
@@ -32,9 +30,6 @@ interface Props {
   skill: ManagedSkill | null;
   onClose: () => void;
   tools?: ToolInfo[];
-  toolToggles?: SkillToolToggle[] | null;
-  togglingTool?: string | null;
-  onToggleTool?: (tool: string, enabled: boolean) => void;
   projects?: Project[];
   onProjectsChanged?: () => void;
 }
@@ -43,9 +38,6 @@ export function SkillDetailPanel({
   skill,
   onClose,
   tools,
-  toolToggles,
-  togglingTool,
-  onToggleTool,
   projects,
   onProjectsChanged,
 }: Props) {
@@ -56,6 +48,7 @@ export function SkillDetailPanel({
     skill.updated_at,
     skill.source_type,
     skill.source_ref ?? "",
+    skill.source_ref_resolved ?? "",
     skill.source_revision ?? "",
     skill.remote_revision ?? "",
   ].join(":");
@@ -66,9 +59,6 @@ export function SkillDetailPanel({
       skill={skill}
       onClose={onClose}
       tools={tools}
-      toolToggles={toolToggles}
-      togglingTool={togglingTool}
-      onToggleTool={onToggleTool}
       projects={projects}
       onProjectsChanged={onProjectsChanged}
     />
@@ -79,18 +69,12 @@ function SkillDetailPanelContent({
   skill,
   onClose,
   tools,
-  toolToggles,
-  togglingTool,
-  onToggleTool,
   projects,
   onProjectsChanged,
 }: {
   skill: ManagedSkill;
   onClose: () => void;
   tools?: ToolInfo[];
-  toolToggles?: SkillToolToggle[] | null;
-  togglingTool?: string | null;
-  onToggleTool?: (tool: string, enabled: boolean) => void;
   projects?: Project[];
   onProjectsChanged?: () => void;
 }) {
@@ -211,18 +195,6 @@ function SkillDetailPanelContent({
   const activeSourceDiff = sourceDiff?.skill_id === skill.id ? sourceDiff : null;
   const sourceDiffLoading =
     contentTab === "diff" && supportsSourceDiff && !activeSourceDiff && !sourceDiffFailed;
-  const toggleItems: AgentToggleItem[] = (toolToggles ?? []).map((toggle) => ({
-    key: toggle.tool,
-    displayName: toggle.display_name,
-    enabled: toggle.enabled,
-    isAvailable: toggle.installed && toggle.globally_enabled,
-    disabled: !toggle.installed || !toggle.globally_enabled,
-    badgeLabel: !toggle.installed
-      ? t("mySkills.agentToggleNotInstalled")
-      : !toggle.globally_enabled
-        ? t("mySkills.agentToggleDisabledGlobally")
-        : null,
-  }));
 
   const meta = (
     <>
@@ -311,15 +283,6 @@ function SkillDetailPanelContent({
       meta={meta}
       onClose={onClose}
     >
-      {toolToggles && onToggleTool && (
-        <AgentToggleSection
-          items={toggleItems}
-          togglingKey={togglingTool}
-          onToggle={onToggleTool}
-          className="mb-4"
-        />
-      )}
-
       {projects && projects.length > 0 && (
         <SkillProjectsSection
           skill={skill}

@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
@@ -6,11 +6,10 @@ use tauri::State;
 
 use crate::core::{
     error::AppError,
-    scenario_service::{self, BatchApplyMode},
+    scenario_service,
     skill_store::{ScenarioRecord, SkillStore},
     sync_metadata,
     timing::should_log_first_or_slow,
-    tool_adapters,
 };
 
 fn refresh_tray_menu_best_effort(app: &tauri::AppHandle) {
@@ -283,52 +282,6 @@ fn delete_preset_with_active_fallback_internal(
     Ok(())
 }
 
-/// Apply a preset to the default targets (all enabled agent globals).
-///
-/// This is the explicit user-initiated action introduced in v1.16. It performs
-/// the same disk-writing work as the legacy [`switch_preset`] command but is
-/// only invoked when the user clicks "Apply to Default" — sidebar/command-palette
-/// preset clicks no longer call this.
-#[tauri::command]
-pub async fn apply_preset_to_default(
-    _app: tauri::AppHandle,
-    _id: String,
-    _store: State<'_, Arc<SkillStore>>,
-) -> Result<(), AppError> {
-    Err(crate::core::v1::blocked_write())
-}
-
-/// Legacy command kept for the CLI and backward compatibility. New callers
-/// should use [`apply_preset_to_default`] (or [`apply_preset_to_coding_agents`]
-/// for the workspace-scoped variant the tray now uses).
-#[tauri::command]
-pub async fn switch_preset(
-    _app: tauri::AppHandle,
-    _id: String,
-    _store: State<'_, Arc<SkillStore>>,
-) -> Result<(), AppError> {
-    Err(crate::core::v1::blocked_write())
-}
-
-async fn apply_preset_to_default_impl(
-    app: tauri::AppHandle,
-    id: String,
-    store: Arc<SkillStore>,
-) -> Result<(), AppError> {
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        scenario_service::apply_scenario_to_default(&store, &id)
-    })
-    .await?;
-    // Refresh even on failure. `apply_scenario_to_default` commits the active
-    // preset before syncing, and syncing now reports ownership refusals as an
-    // error (#363) — so an error here still means the preset switched and most
-    // skills deployed. Gating the refresh on success would leave the tray
-    // showing the old preset while the app is on the new one. Failures that
-    // happen before the switch make this a harmless no-op refresh.
-    refresh_tray_menu_best_effort(&app);
-    result.and_then(scenario_service::refusals_to_error)
-}
-
 #[tauri::command]
 pub async fn add_skill_to_preset(
     app: tauri::AppHandle,
@@ -341,9 +294,8 @@ pub async fn add_skill_to_preset(
         set_preset_skills_internal(&store, &preset_id, &[skill_id], true)?;
         // Membership-only edit. We intentionally do NOT sync to disk here,
         // even when this preset happens to be the legacy `active_scenario_id`,
-        // because in the post-v1.16 model presets are curation labels, not
-        // implicit deployment switches. Users apply presets explicitly via
-        // PresetBar / the tray, which is where the actual write happens.
+        // because presets are curation labels, not implicit deployment
+        // switches. Users deploy explicitly via the CLI / per-skill commands.
         Ok(())
     })
     .await?;
@@ -365,8 +317,7 @@ pub async fn remove_skill_from_preset(
         set_preset_skills_internal(&store, &preset_id, &[skill_id], false)?;
         // Same rationale as add_skill_to_preset: editing preset membership
         // never wipes on-disk skill targets. To remove a skill from a coding
-        // agent the caller goes through PresetBar / the tray (or the explicit
-        // per-skill unsync command).
+        // agent the caller uses the CLI / the explicit per-skill unsync path.
         Ok(())
     })
     .await?;
@@ -476,74 +427,10 @@ pub(crate) fn unsync_scenario_skills(
     scenario_service::unsync_scenario_skills(store, scenario_id)
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum PresetApplyMode {
-    Add,
-    Remove,
-}
-
-impl From<PresetApplyMode> for BatchApplyMode {
-    fn from(value: PresetApplyMode) -> Self {
-        match value {
-            PresetApplyMode::Add => BatchApplyMode::Add,
-            PresetApplyMode::Remove => BatchApplyMode::Remove,
-        }
-    }
-}
-
-/// Apply (or remove) every skill in `preset_id` against every enabled coding
-/// agent (`ToolCategory::Coding`). Mirrors the PresetBar behavior in the
-/// global workspace view but covers all enabled coding agents at once.
-///
-/// Lobster agents are intentionally excluded — they have their own workspace
-/// and their own preset bar.
-#[tauri::command]
-pub async fn apply_preset_to_coding_agents(
-    _app: tauri::AppHandle,
-    _preset_id: String,
-    _mode: PresetApplyMode,
-    _store: State<'_, Arc<SkillStore>>,
-) -> Result<(), AppError> {
-    Err(crate::core::v1::blocked_write())
-}
-
-#[allow(dead_code)]
-pub async fn apply_preset_to_coding_agents_legacy(
-    app: tauri::AppHandle,
-    preset_id: String,
-    mode: PresetApplyMode,
-    store: State<'_, Arc<SkillStore>>,
-) -> Result<(), AppError> {
-    let store = store.inner().clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        scenario_service::ensure_scenario_exists(&store, &preset_id)?;
-        let skill_ids = store
-            .get_skill_ids_for_scenario(&preset_id)
-            .map_err(AppError::db)?;
-        if skill_ids.is_empty() {
-            return Ok(());
-        }
-        let tool_keys: Vec<String> = tool_adapters::enabled_installed_adapters(&store)
-            .into_iter()
-            .filter(|adapter| matches!(adapter.category, tool_adapters::ToolCategory::Coding))
-            .map(|adapter| adapter.key)
-            .collect();
-        if tool_keys.is_empty() {
-            return Ok(());
-        }
-        scenario_service::apply_skills_to_tools(&store, &skill_ids, &tool_keys, mode.into())
-    })
-    .await?;
-    if result.is_ok() {
-        refresh_tray_menu_best_effort(&app);
-    }
-    result
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use crate::core::scenario_service::{
         collect_scenario_sync_targets, sync_desired_targets, unsync_obsolete_scenario_targets,
     };
