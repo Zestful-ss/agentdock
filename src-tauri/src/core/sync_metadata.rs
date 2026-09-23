@@ -76,7 +76,6 @@ pub fn has_complete_skill_snapshot() -> bool {
     metadata_dir().join("schema.json").is_file() && metadata_dir().join("skills").is_dir()
 }
 
-#[allow(dead_code)]
 pub fn write_all_from_db(store: &SkillStore) -> Result<()> {
     // Foreground wait: this runs at startup and from CLI preset/enable
     // commands, which must succeed (startup aborts on error), not skip.
@@ -104,7 +103,6 @@ pub(crate) fn write_all_from_db_unlocked(store: &SkillStore) -> Result<()> {
     Ok(())
 }
 
-#[allow(dead_code)]
 pub fn reindex_from_metadata(store: &SkillStore) -> Result<()> {
     // Foreground wait: runs at process startup (GUI and every CLI invocation),
     // which aborts on error — better to wait out transient contention than fail.
@@ -222,14 +220,6 @@ pub(crate) fn reindex_from_metadata_unlocked(store: &SkillStore) -> Result<()> {
         store.replace_scenario_memberships_from_metadata(&memberships)?;
     }
     Ok(())
-}
-
-#[allow(dead_code)]
-pub fn ensure_skill_metadata(store: &SkillStore, skill_id: &str) -> Result<()> {
-    // Foreground wait: the CLI `tag` commands flush metadata here after a DB
-    // write; they should ride out contention rather than fail fast.
-    let _lock = RepoLock::acquire_foreground("write skill metadata")?;
-    ensure_skill_metadata_unlocked(store, skill_id)
 }
 
 pub(crate) fn ensure_skill_metadata_unlocked(store: &SkillStore, skill_id: &str) -> Result<()> {

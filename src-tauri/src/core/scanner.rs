@@ -153,11 +153,6 @@ fn scan_recursive_dir(
     }
 }
 
-#[allow(dead_code)]
-pub fn scan_local_skills(managed_paths: &[String]) -> Result<ScanPlan> {
-    scan_local_skills_with_adapters(managed_paths, &tool_adapters::default_tool_adapters())
-}
-
 pub fn scan_local_skills_with_adapters(
     managed_paths: &[String],
     adapters: &[tool_adapters::ToolAdapter],

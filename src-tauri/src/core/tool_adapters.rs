@@ -961,11 +961,6 @@ pub fn all_tool_adapters(store: &crate::core::skill_store::SkillStore) -> Vec<To
     adapters
 }
 
-#[allow(dead_code)]
-pub fn find_adapter(key: &str) -> Option<ToolAdapter> {
-    default_tool_adapters().into_iter().find(|a| a.key == key)
-}
-
 /// Find an adapter by key, considering custom tools and path overrides.
 pub fn find_adapter_with_store(
     store: &crate::core::skill_store::SkillStore,

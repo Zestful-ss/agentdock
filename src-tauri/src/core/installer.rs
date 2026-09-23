@@ -160,10 +160,6 @@ pub fn hash_local_source_eol_insensitive(source: &Path) -> Result<String> {
     content_hash::hash_directory_eol_insensitive(prepared.skill_dir())
 }
 
-pub fn install_from_git_dir(source: &Path, name: Option<&str>) -> Result<InstallResult> {
-    install_from_local(source, name)
-}
-
 pub fn install_skill_dir_to_destination(
     source: &Path,
     name: &str,
