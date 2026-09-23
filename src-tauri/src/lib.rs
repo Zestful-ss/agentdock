@@ -428,6 +428,7 @@ fn ensure_tray_icon(app: &tauri::AppHandle) -> tauri::Result<()> {
                     log::debug!("Tray menu clicked: check for updates");
                     check_updates_from_tray(app);
                 }
+                _ => {}
             }
         });
 

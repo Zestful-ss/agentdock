@@ -234,7 +234,9 @@ fn publish_from(source: &Path, app_version: &str) -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use super::*;
+    #[cfg(unix)]
     use tempfile::tempdir;
 
     /// A fake "bundled CLI" that reports the version it is told to. The copy,
