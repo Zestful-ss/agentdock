@@ -950,17 +950,31 @@ fn run_git_capture_with_timeout(mut command: Command) -> Result<String> {
         .stderr(Stdio::piped())
         .spawn()
         .context("Failed to start git")?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("git stderr pipe was not created"))?;
+    // Drain stderr concurrently; otherwise a large ref listing can fill the
+    // pipe and deadlock the child while the parent is waiting for exit.
+    let stderr_thread = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stderr.read_to_end(&mut bytes);
+        bytes
+    });
     let deadline = Instant::now() + Duration::from_secs(CLONE_TIMEOUT_SECS);
 
     loop {
         match child.try_wait()? {
             Some(status) => {
                 let output = child.wait_with_output()?;
+                let stderr_bytes = stderr_thread
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("git stderr reader panicked"))?;
                 if !status.success() {
                     bail!(
                         "git exited with {}: {}",
                         status,
-                        String::from_utf8_lossy(&output.stderr).trim()
+                        String::from_utf8_lossy(&stderr_bytes).trim()
                     );
                 }
                 return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
@@ -968,6 +982,7 @@ fn run_git_capture_with_timeout(mut command: Command) -> Result<String> {
             None if Instant::now() >= deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
+                let _ = stderr_thread.join();
                 bail!("git timed out after {}s", CLONE_TIMEOUT_SECS);
             }
             None => std::thread::sleep(Duration::from_millis(100)),
