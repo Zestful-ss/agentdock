@@ -1546,10 +1546,9 @@ fn list_remote_ref_names(url: &str, proxy_url: Option<&str>) -> Result<RemoteRef
         cmd.arg("-c").arg(format!("http.proxy={proxy}"));
         cmd.arg("-c").arg(format!("https.proxy={proxy}"));
     }
-    let stdout = run_git_capture_with_timeout(
-        cmd.args(["ls-remote", "--heads", "--tags", url]),
-    )
-    .with_context(|| format!("Failed to list remote refs for {}", url))?;
+    cmd.args(["ls-remote", "--heads", "--tags", url]);
+    let stdout = run_git_capture_with_timeout(cmd)
+        .with_context(|| format!("Failed to list remote refs for {}", url))?;
 
     Ok(parse_remote_ref_names(&stdout))
 }
