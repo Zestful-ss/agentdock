@@ -12,6 +12,8 @@ use crate::core::{
     canonical, content_hash, error::AppError, project_scanner, skill_metadata, sync_metadata,
     tool_adapters,
 };
+#[cfg(test)]
+use crate::core::{scenario_service, sync_engine, tool_service};
 
 fn adapter_for_agent(
     store: &SkillStore,
