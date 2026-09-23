@@ -38,11 +38,20 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Write build config override
+        shell: pwsh
+        run: |
+          $cfg = @{
+            bundle = @{
+              createUpdaterArtifacts = $false
+              targets = @('nsis', 'msi')
+            }
+          } | ConvertTo-Json -Depth 5
+          Set-Content -Path tauri.windows-build.json -Value $cfg -Encoding utf8
+          Get-Content tauri.windows-build.json
+
       - name: Build installers (NSIS + MSI, no updater artifacts)
-        run: >-
-          npx tauri build
-          --target x86_64-pc-windows-msvc
-          --config "{\"bundle\":{\"createUpdaterArtifacts\":false,\"targets\":[\"nsis\",\"msi\"]}}"
+        run: npx tauri build --target x86_64-pc-windows-msvc --config tauri.windows-build.json
 
       - name: Collect installers
         shell: pwsh
