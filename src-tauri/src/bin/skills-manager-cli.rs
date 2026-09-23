@@ -1548,7 +1548,7 @@ fn install_local_action(
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
     let meta = skill_metadata::parse_skill_md(&dest);
-    let hash = content_hash::hash_directory(&dest).map_err(map_app_err)?;
+    let hash = content_hash::hash_directory(&dest)?;
     let central_path = dest.to_string_lossy().to_string();
     let result = installer::InstallResult {
         name: install_name.clone(),
@@ -1662,14 +1662,11 @@ fn install_git_action(
             .ok_or_else(|| anyhow!("git install missing destination path"))?;
 
         let record = store
-            .get_skill_by_central_path(&dest_path)
-            .map_err(map_app_err)?
+            .get_skill_by_central_path(&dest_path)?
             .ok_or_else(|| anyhow!("installed skill not found in index: {dest_path}"))?;
 
         if let Some(scenario_id) = active_scenario {
-            store
-                .add_skill_to_scenario(scenario_id, &record.id)
-                .map_err(map_app_err)?;
+            store.add_skill_to_scenario(scenario_id, &record.id)?;
             if let Err(e) =
                 scenario_service::sync_skill_to_active_scenario(store, scenario_id, &record.id)
             {
