@@ -49,24 +49,6 @@ description: Manage the user's canonical agent-skill library (~/.agents/skills a
 "$SM" --json skills list
 ```
 
-### When a deployment is refused
-
-A deploy that would overwrite something that is not ours is refused outright —
-nothing at those paths is deleted, and nothing else in the batch is applied.
-That failure is machine-readable, so report the actual paths rather than the
-sentence:
-
-```json
-{"ok": false, "code": "TARGET_CONFLICT", "kind": "target_conflict",
- "message": "Refusing to deploy: 1 of 2 target(s) …",
- "details": {"conflicts": [{"path": "/Users/me/.claude/skills/db",
-                            "reason": "is not a managed deployment"}]}}
-```
-
-Tell the user which path is in the way, that its contents are untouched, and
-offer the two ways out: adopt it into the library (`skills adopt`), or move it
-aside and retry. Never delete it for them.
-
 ## Mental model
 
 V1 writes skills only into the canonical roots — user `~/.agents/skills/` and project `<repo>/.agents/skills/` — not into harness-specific folders. Harnesses are discovery sources (Inventory / MCP observe them); they are not deployment targets. Each skill has source metadata, preset membership, tags, and a canonical location. A **preset** is a reusable curation group; several presets may be members at the same time.
@@ -75,8 +57,6 @@ Keep these three states separate:
 - **Library**: install/remove controls whether Skills Manager owns the skill under `.agents`.
 - **Preset membership**: `presets add-skill/remove-skill` organizes the library only (curation, not disk sync).
 - **Harness observation**: Inventory / agents list report what a harness already sees; they never write into harness dirs.
-
-CLI `skills deploy` / `presets deploy` still exist for compatibility, but V1 policy refuses harness-directory writes (`POLICY_MESSAGE`: canonical locations are `~/.agents/skills` and `<repo>/.agents/skills`). Prefer install into `.agents` and let native consumers pick skills up.
 
 Internally, presets are still stored as scenarios for backward-compatible Git Backup. The CLI and UI call them presets.
 
@@ -99,13 +79,6 @@ Internally, presets are still stored as scenarios for backward-compatible Git Ba
 ```
 
 **Default is library-only** — the skill enters the canonical library under `~/.agents/skills`. Native `.agents` consumers (Codex, OpenCode, DeepSeek Harness, Kimi, Pi) pick it up from there. Do not deploy into harness-specific folders in V1.
-
-```bash
-# Optional compatibility path (may be refused by V1 policy for harness dirs)
-"$SM" skills deploy <skill> --agent claude_code
-```
-
-`--sync` and `--sync-preset` remain legacy shortcuts for the exclusive active-preset workflow.
 
 **Ref resolution** is deterministic, no path-existence guessing:
 1. Starts with `./`, `../`, `/`, or `~/` → local path
@@ -159,37 +132,15 @@ Note what this does *not* cover: a file the user edited that the new version als
 "$SM" skills remove <skill> --yes
 ```
 
-Remove deletes the central-library copy, all synced targets across agents, and the DB row. It's not reversible without re-installing.
+Remove deletes the central-library copy, all harness target rows for that skill, and the DB row. It's not reversible without re-installing.
 
-## Deploy / Undeploy
+## Observe deployment state (read-only)
 
 ```bash
-"$SM" skills deploy <skill> --agent claude_code
-"$SM" skills undeploy <skill> --agent codex
-"$SM" skills deploy <skill-a> <skill-b> --agent codex --dry-run
-"$SM" skills deploy <skill> --agent claude_code --agent codex
 "$SM" --json skills status <skill>
 ```
 
-These commands change real managed deployments without deleting the central-library copy or changing preset membership. `skills enable/disable` are deprecated compatibility commands and do not change deployment; never use them.
-
-`skills deploy` and `skills undeploy` always require at least one explicit `--agent`, whether the command names one skill or several. `skills status` also reports target rows left by a custom agent that is no longer registered, so stale deployments stay visible and can be cleaned with an explicit undeploy while the row exists.
-
-## Legacy exclusive sync
-
-```bash
-# Sync current active preset to all enabled agents
-"$SM" skills sync
-
-# Preview the target list — safe, no writes
-"$SM" skills sync --dry-run
-
-# Switch the one legacy active preset, then sync
-"$SM" skills sync --preset "Web Dev"
-
-# Only sync to a single agent (useful when one agent's directory got out of sync)
-"$SM" skills sync --tool claude_code
-```
+`skills status` reports what the library owns. Harness directories are observe-only in V1; there is no CLI path that writes them.
 
 ## Adopt skills installed elsewhere
 
@@ -233,12 +184,11 @@ When skills already live in an agent's directory (e.g. installed via `npx skills
 
 This is how a `local` skill becomes git-backed so `update` works, and how a
 skill pointed at the wrong repo gets corrected. It updates the row **in place**,
-so the skill id survives and the tags, preset membership and per-agent
-deployments keyed to it all stay intact.
+so the skill id survives and the tags and preset membership keyed to it all stay intact.
 
 - The flag is `--subpath` here, not `--git-subpath` — that one belongs to `adopt`. Pass `--subpath ""` when the skill is at the repo root, which must itself hold a `SKILL.md`.
 - `--branch` overrides a branch encoded in the URL.
-- The report carries `content_changed` — a single boolean, **not** a file list. It compares the new source against the hash currently recorded for the library copy, not a fresh hash of the directory on disk, so edits made inside the central copy afterwards do not register as a difference. When it is `false` the library copy is left untouched and those edits survive; copy-mode deployments are re-synced either way.
+- The report carries `content_changed` — a single boolean, **not** a file list. It compares the new source against the hash currently recorded for the library copy, not a fresh hash of the directory on disk, so edits made inside the central copy afterwards do not register as a difference. When it is `false` the library copy is left untouched and those edits survive.
 
 **`--force` is destructive, and nothing stands between it and the user's files.**
 A content difference is refused without it. With it, the whole skill directory is
@@ -270,7 +220,6 @@ Useful organization queries:
 "$SM" --json skills list --no-preset
 "$SM" --json skills list --tag frontend
 "$SM" --json skills list --preset "Web Dev"
-"$SM" --json skills list --deployed-to codex
 ```
 
 ## Presets
@@ -286,34 +235,23 @@ Useful organization queries:
 
 "$SM" presets add-skill <preset> <skill>...
 "$SM" presets remove-skill <preset> <skill>...
-
-"$SM" presets deploy <preset>                  # all enabled coding agents
-"$SM" presets deploy <preset> --agent codex
-"$SM" presets undeploy <preset> --agent claude_code
-"$SM" presets undeploy <preset>                # every agent with target rows for this preset
 "$SM" --json presets status <preset>
 ```
 
-`deploy/undeploy` are additive and match the app's Preset pills. Explicit `presets apply/deactivate` commands remain for the legacy exclusive active-preset model; do not use them for normal "turn this preset on/off" requests.
-
-The no-`--agent` defaults intentionally differ: deploy targets all installed, enabled coding agents; undeploy discovers the preset's actual target rows and removes them even when an agent is now disabled, uninstalled, or no longer registered. Use the no-agent undeploy for "turn this preset off everywhere."
-
-Preset create/update/delete and add-skill/remove-skill are organization-only CLI operations. They never deploy or undeploy agent files implicitly.
+Preset create/update/delete and add-skill/remove-skill are organization-only CLI operations. They never write harness files.
 
 ## Health check
 
-When sync misbehaves or a command errors in a confusing way:
+When a command errors in a confusing way:
 
 ```bash
 "$SM" --json repo status   # base dir, skill / preset counts, active preset
-"$SM" --json agents list  # detected agents and their target paths
+"$SM" --json agents list  # detected agents and their observed paths
 "$SM" agents enable codex
 "$SM" agents disable claude_code
 ```
 
-`repo status` and `agents list` are read-only and are the first checks for "why isn't this skill showing up in Cursor" questions. `agents disable` is a real mutation: it removes every managed deployment for that agent. `agents enable` makes the agent globally available again and re-syncs the legacy active preset, if one exists; use explicit skill or preset deployment afterward when the requested state is additive.
-
-Use `agents disable <agent>` when the user wants the whole Agent integration turned off or wants every managed skill removed from it. If they only want one skill or preset removed while keeping the Agent available for future deployments, use `skills undeploy` or `presets undeploy` instead.
+`repo status` and `agents list` are read-only and are the first checks for "why isn't this skill showing up in Cursor" questions. `agents disable` / `enable` only flip the agent's registration flag for discovery; they do not write harness directories.
 
 ## Typical workflows
 
@@ -322,8 +260,7 @@ Use `agents disable <agent>` when the user wants the whole Agent integration tur
 1. `skills search "X" --limit 5` — show the top 1–3 hits with install counts and source.
 2. If a clear winner: `skills install <install_ref>`.
 3. If ambiguous: ask the user to pick.
-4. Deploy it to the agent(s) the user requested with `skills deploy`.
-5. `skills status <name>` to confirm the library and deployment state.
+4. `skills status <name>` to confirm the library state.
 
 ### "What skills do I have?"
 
@@ -331,7 +268,7 @@ Use `agents disable <agent>` when the user wants the whole Agent integration tur
 "$SM" --json skills list
 ```
 
-The `preset_ids`, `presets`, `deployed_to`, `tags`, and `source_type` fields are usually the most informative. The legacy `enabled` field is not deployment state.
+The `preset_ids`, `presets`, `tags`, and `source_type` fields are usually the most informative. The legacy `enabled` field is not deployment state.
 
 ### "Pull in the skills already installed in my agent directories"
 

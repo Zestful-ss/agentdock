@@ -475,20 +475,15 @@
   },
   "addFromLibrary": {
     "title": "从技能库添加",
-    "targetLabel": "目标：",
-    "noTargetSelected": "未选择",
-    "selectAllTargets": "全选",
     "selectAllSkills": "全选技能",
     "deselectAllSkills": "取消全选",
     "selectedCount": "已选 {{count}} 个",
     "shiftHint": "按住 Shift 点击可批量选择",
-    "clearTargets": "清空",
     "searchPlaceholder": "搜索技能库…",
     "emptyLibrary": "技能库为空",
     "emptyMatch": "没有匹配的 Skill",
-    "ctaEmptyProject": "选择要添加的 Skill（{{count}} 个 Agent）",
-    "ctaProject": "添加 {{count}} 个 · {{agentCount}} 个 Agent",
-    "ctaNoTarget": "请先选择目标 Agent",
+    "ctaEmpty": "选择要添加的 Skill",
+    "cta": "添加 {{count}} 个 Skill",
     "toastInstalled": "已添加 {{count}} 个 Skill",
     "toastFailed": "有 {{count}} 个 Skill 添加失败",
     "toastAddedToProject": "已将“{{skill}}”添加到 {{project}}",
@@ -497,9 +492,6 @@
     "installedShort": "已添加",
     "projectsTitle": "项目工作区",
     "projectsSummary": "{{installed}} / {{total}} 已添加",
-    "errors": {
-      "noTarget": "请至少选择一个目标 Agent"
-    },
     "status": {
       "installed": "已添加",
       "conflict": "名称冲突",
@@ -507,9 +499,9 @@
     },
     "tooltip": {
       "installed": "已经在工作区中",
-      "remove": "点击从此 Agent 移除",
+      "remove": "点击移除",
       "conflict": "请先重命名库中的 Skill",
-      "unavailable": "请先选择目标 Agent"
+      "unavailable": "在此项目中不可用"
     }
   },
   "preset": {
@@ -526,7 +518,7 @@
   },
   "project": {
     "noSkills": "该项目下没有 Skills",
-    "noSkillsHint": "未发现任何 Agent 的 Skills 目录。可创建 .claude/skills/ 等目录并添加 Skill 文件夹。",
+    "noSkillsHint": "未发现项目 .agents/skills 目录下的技能。可创建 .agents/skills/ 并添加技能文件夹，或从技能库添加。",
     "addManual": "选择仓库目录",
     "scanDir": "扫描目录",
     "scanDirPlaceholder": "输入要扫描的根目录路径，如 ~/Work",
@@ -578,7 +570,6 @@
     "docTabs": {
       "center": "中心"
     },
-    "moreAgents": "更多 Agent（{{count}}）",
     "deleteSkill": "删除 Skill",
     "deleteSkillConfirm": "确定永久删除 Skill \"{{name}}\" 吗？此操作不可恢复。",
     "skillDeleted": "\"{{name}}\" 已删除",

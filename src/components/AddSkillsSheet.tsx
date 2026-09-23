@@ -2,31 +2,21 @@ import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "reac
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import {
-  CheckCircle2,
-  ChevronDown,
-  ChevronRight,
-  CircleSlash,
-  Loader2,
-  Search,
-  X,
-} from "lucide-react";
+import { CircleSlash, Loader2, Search, X } from "lucide-react";
 import { cn } from "../utils";
 import * as api from "../lib/tauri";
-import type { ManagedSkill, ProjectAgentTarget } from "../lib/tauri";
+import type { ManagedSkill } from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
 import {
   classifySkill,
-  targetsToInstall,
+  canInstallToProject,
   type PickerContext,
-  type ProjectPickerContext,
 } from "../lib/skillPickerStatus";
 import {
   getTagActiveColor,
   getTagColor,
   UNTAGGED_FILTER,
 } from "../lib/skillTags";
-import { AgentIcon } from "./AgentIcon";
 import { SkillPickerRow } from "./SkillPickerRow";
 
 const SOURCE_PRIORITY = ["local", "import", "git", "skillssh"];
@@ -35,15 +25,10 @@ export interface ProjectSheetTarget {
   kind: "project";
   projectId: string;
   projectName: string;
-  exportTargets: ProjectAgentTarget[];
-  /** dir/relative_path names already used in the project, keyed by agent */
-  projectSkillDirNamesByAgent: Record<string, string[]>;
-  /** managed skill ids already installed in the project, keyed by agent */
-  projectCenterSkillIdsByAgent: Record<string, string[]>;
-  /** Initial target agent selection (precomputed by caller using last-used > default > empty). */
-  initialSelectedAgents: string[];
-  /** Persist this selection as the per-project last-used set. */
-  onPersistLastUsed: (agents: string[]) => void;
+  /** dir/relative_path names already used under `<repo>/.agents/skills` */
+  projectSkillDirNames: string[];
+  /** managed skill ids already installed in the canonical project root */
+  projectCenterSkillIds: string[];
 }
 
 interface Props {
@@ -68,10 +53,6 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [anchorId, setAnchorId] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
-
-  const initialAgents = target.initialSelectedAgents;
-  const [selectedAgents, setSelectedAgents] = useState<string[]>(initialAgents);
-  const [showInactiveAgents, setShowInactiveAgents] = useState(false);
 
   const [dirNameMap, setDirNameMap] = useState<Record<string, string>>({});
   const [dirNameMapError, setDirNameMapError] = useState(false);
@@ -125,13 +106,12 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
   const ctx: PickerContext = useMemo(() => {
     return {
       kind: "project",
-      selectedAgents,
-      projectSkillDirNamesByAgent: target.projectSkillDirNamesByAgent,
-      projectCenterSkillIdsByAgent: target.projectCenterSkillIdsByAgent,
+      projectSkillDirNames: target.projectSkillDirNames,
+      projectCenterSkillIds: target.projectCenterSkillIds,
       dirNameMap,
       dirNameMapError,
     };
-  }, [target, selectedAgents, dirNameMap, dirNameMapError]);
+  }, [target, dirNameMap, dirNameMapError]);
 
   const allTags = useMemo(() => {
     const tags = new Set<string>();
@@ -275,19 +255,6 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
     });
   };
 
-  const toggleAgent = (key: string) => {
-    setSelectedAgents((prev) => {
-      const next = prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key];
-      target.onPersistLastUsed(next);
-      return next;
-    });
-  };
-
-  const setAllEnabledAgents = (next: string[]) => {
-    setSelectedAgents(next);
-    target.onPersistLastUsed(next);
-  };
-
   const selectableSelected = useMemo(
     () => Array.from(selectedIds).filter((id) => {
       const skill = managedSkills.find((s) => s.id === id);
@@ -297,19 +264,13 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
     [selectedIds, managedSkills, ctx],
   );
 
-  const projectCtx = ctx as ProjectPickerContext;
   const projectNamesReady = dirNameMapError || !dirNameMapLoading;
-  const enabledTargets = target.exportTargets.filter((tt) => tt.installed && tt.enabled);
-  const inactiveTargets = target.exportTargets.filter((tt) => !tt.installed || !tt.enabled);
 
   const ctaLabel = (() => {
     const count = selectableSelected.length;
-    if (selectedAgents.length === 0) {
-      return t("addFromLibrary.ctaNoTarget");
-    }
     return count === 0
-      ? t("addFromLibrary.ctaEmptyProject", { count: selectedAgents.length })
-      : t("addFromLibrary.ctaProject", { count, agentCount: selectedAgents.length });
+      ? t("addFromLibrary.ctaEmpty", { count: 0 })
+      : t("addFromLibrary.cta", { count });
   })();
 
   const handleInstall = async () => {
@@ -319,19 +280,13 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
     let failed = 0;
     const failures: string[] = [];
     try {
-      if (selectedAgents.length === 0) {
-        toast.error(t("addFromLibrary.errors.noTarget"));
-        setInstalling(false);
-        return;
-      }
       if (!projectNamesReady) return;
       for (const id of selectableSelected) {
         try {
           const skill = managedSkills.find((s) => s.id === id);
           if (!skill) continue;
-          const agents = targetsToInstall(skill, projectCtx);
-          if (agents.length === 0) continue;
-          await api.exportSkillToProject(id, target.projectId, agents);
+          if (!canInstallToProject(skill, ctx)) continue;
+          await api.exportSkillToProject(id, target.projectId);
           ok++;
         } catch (e) {
           failed++;
@@ -364,114 +319,6 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
     }
   };
 
-  const targetSummary = (() => {
-    const allSelected =
-      enabledTargets.length > 0 && enabledTargets.every((tt) => selectedAgents.includes(tt.key));
-    const toggleAll = () => {
-      if (allSelected) {
-        setAllEnabledAgents([]);
-      } else {
-        setAllEnabledAgents(enabledTargets.map((tt) => tt.key));
-      }
-    };
-
-    return (
-      <div className="space-y-2">
-        <div className="flex items-start gap-2 text-[12px]">
-          <span className="shrink-0 pt-1 text-muted">{t("addFromLibrary.targetLabel")}</span>
-          <div className="min-w-0 flex-1">
-            {enabledTargets.length === 0 ? (
-              <span className="inline-flex items-center rounded-full border border-dashed border-border px-2.5 py-1 italic text-muted">
-                {t("addFromLibrary.noTargetSelected")}
-              </span>
-            ) : (
-              <div className="flex flex-wrap items-center gap-1.5">
-                {enabledTargets.map((tt) => {
-                  const active = selectedAgents.includes(tt.key);
-                  return (
-                    <button
-                      key={tt.key}
-                      type="button"
-                      onClick={() => toggleAgent(tt.key)}
-                      aria-pressed={active}
-                      title={tt.display_name}
-                      className={cn(
-                        "inline-flex items-center gap-1.5 rounded-full border py-1 pl-1 pr-2.5 text-[12px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
-                        active
-                          ? "border-accent-border bg-accent-bg text-accent-light"
-                          : "border-border-subtle bg-surface text-muted hover:bg-surface-hover hover:text-secondary",
-                      )}
-                    >
-                      <span className="relative inline-flex">
-                        <AgentIcon
-                          agentKey={tt.key}
-                          displayName={tt.display_name}
-                          className={cn(
-                            "h-5 w-5 rounded-full border-0 bg-transparent",
-                            !active && "opacity-60",
-                          )}
-                        />
-                        {active && (
-                          <span className="absolute -right-0.5 -top-0.5 inline-flex h-3 w-3 items-center justify-center rounded-full bg-accent text-white">
-                            <CheckCircle2 className="h-2.5 w-2.5" strokeWidth={3} />
-                          </span>
-                        )}
-                      </span>
-                      <span>{tt.display_name}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-          {enabledTargets.length > 0 && (
-            <button
-              type="button"
-              onClick={toggleAll}
-              className="shrink-0 pt-1 text-[12px] text-accent-light transition-colors hover:underline"
-            >
-              {allSelected ? t("addFromLibrary.clearTargets") : t("addFromLibrary.selectAllTargets")}
-            </button>
-          )}
-        </div>
-        {inactiveTargets.length > 0 && (
-          <div className="ml-12">
-            <button
-              type="button"
-              onClick={() => setShowInactiveAgents((prev) => !prev)}
-              className="inline-flex items-center gap-1 text-[12px] text-muted transition-colors hover:text-secondary"
-            >
-              {showInactiveAgents ? (
-                <ChevronDown className="h-3 w-3" />
-              ) : (
-                <ChevronRight className="h-3 w-3" />
-              )}
-              <span>{t("project.moreAgents", { count: inactiveTargets.length })}</span>
-            </button>
-            {showInactiveAgents && (
-              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                {inactiveTargets.map((tt) => (
-                  <span
-                    key={tt.key}
-                    title={t("addFromLibrary.tooltip.unavailable")}
-                    className="inline-flex cursor-not-allowed items-center gap-1.5 rounded-full border border-border-subtle bg-background py-1 pl-1 pr-2.5 text-[12px] font-medium text-muted opacity-55"
-                  >
-                    <AgentIcon
-                      agentKey={tt.key}
-                      displayName={tt.display_name}
-                      className="h-5 w-5 rounded-full border-0 bg-transparent"
-                    />
-                    <span>{tt.display_name}</span>
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    );
-  })();
-
   return (
     <div className="fixed inset-0 z-50">
       <div
@@ -484,7 +331,7 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
             <h2 className="text-[14px] font-semibold text-primary">
               {t("addFromLibrary.title")}
             </h2>
-            <div className="mt-2">{targetSummary}</div>
+            <div className="mt-2 text-[12px] text-muted">{target.projectName}</div>
           </div>
           <button
             onClick={onClose}
@@ -629,8 +476,7 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
             disabled={
               installing ||
               !projectNamesReady ||
-              selectableSelected.length === 0 ||
-              (target.kind === "project" && selectedAgents.length === 0)
+              selectableSelected.length === 0
             }
             className="inline-flex w-full items-center justify-center gap-1.5 rounded-md bg-accent px-3 py-2.5 text-[13px] font-medium text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
           >

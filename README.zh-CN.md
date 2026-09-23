@@ -183,13 +183,10 @@ npm run tauri:dev
 npm run cli -- skills list
 npm run cli -- skills show db
 
-# 装进技能库（默认不会自动部署到任何 Agent）
+# 装进技能库（只写 canonical .agents/skills；Harness 只观察不写入）
 npm run cli -- skills install ./my-skill
 npm run cli -- skills install https://github.com/foo/bar/tree/main/skills/baz
 npm run cli -- skills install vercel-labs/agent-skills@react-best-practices
-
-# 部署给该有它的 Agent，然后核对
-npm run cli -- skills deploy react-best-practices --agent claude_code --agent codex
 npm run cli -- skills status react-best-practices
 
 # 拉上游更新；把 Agent 里已有的技能纳管进来
@@ -203,13 +200,13 @@ npm run cli -- skills adopt ~/.claude/skills --dry-run
 可用命令分组：
 - `repo`：查看或修改当前 base directory
 - `agents`（兼容别名 `tools`）：列出 Agent，并全局启用或禁用 Agent
-- `skills`：管理中央库、标签，以及 skill 在各 Agent 中的真实部署
-- `presets`：创建、修改、删除、整理、部署或撤下 Preset
+- `skills`：管理中央库与标签（`list` / `show` / `install` / `update` / `remove` / `status`、标签、Preset 归属）
+- `presets`：创建、修改、删除、整理、查看 Preset
 - `git`：操作 git 管理的 `skills/` 仓库（`clone`、`pull`、`push`、`commit`、`versions`、`restore`）
 
 额外参数：
 - `--skills-root <path>`：直接针对某个已 clone / 已导出的 skills repo 操作，而不是本机 app 默认目录。manager 的状态（DB、scenarios、cache、logs）会落在 `~/.skills-manager/external/<name>-<hash>/`，按 skills root 的规范化路径分目录隔离，外部仓库本身保持干净。
-- `--json`：给脚本 / agent 使用的机器可读输出。失败时在 stderr 打印 `{"ok": false, "code": …, "message": …}` 并以非零码退出。因目标不属于我们而被拒绝的部署会把路径作为数据带出来（`code: "TARGET_CONFLICT"`、`details.conflicts[].path`），调用方可以直接指出是哪个目录挡路，而不是转述一句话。
+- `--json`：给脚本 / agent 使用的机器可读输出。失败时在 stderr 打印 `{"ok": false, "code": …, "message": …}` 并以非零码退出。
 
 ```bash
 npm run -s cli -- --skills-root /path/to/my-skills --json skills list

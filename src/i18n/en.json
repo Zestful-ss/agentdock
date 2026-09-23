@@ -475,20 +475,15 @@
   },
   "addFromLibrary": {
     "title": "Add from Library",
-    "targetLabel": "Target:",
-    "noTargetSelected": "no target",
-    "selectAllTargets": "Select all",
     "selectAllSkills": "Select all skills",
     "deselectAllSkills": "Deselect all skills",
     "selectedCount": "{{count}} selected",
     "shiftHint": "Shift + click to select a range",
-    "clearTargets": "Clear",
     "searchPlaceholder": "Search the library…",
     "emptyLibrary": "Your library is empty",
     "emptyMatch": "No skills match",
-    "ctaEmptyProject": "Pick skills to add ({{count}} agents)",
-    "ctaProject": "Add {{count}} · {{agentCount}} agents",
-    "ctaNoTarget": "Select target agents first",
+    "ctaEmpty": "Select skills to add",
+    "cta": "Add {{count}} skill(s)",
     "toastInstalled": "{{count}} skill(s) added",
     "toastFailed": "{{count}} skill(s) failed to add",
     "toastAddedToProject": "Added \"{{skill}}\" to {{project}}",
@@ -497,9 +492,6 @@
     "installedShort": "Added",
     "projectsTitle": "Project Workspaces",
     "projectsSummary": "{{installed}} / {{total}} installed",
-    "errors": {
-      "noTarget": "Select at least one target agent"
-    },
     "status": {
       "installed": "Installed",
       "conflict": "Name conflict",
@@ -507,9 +499,9 @@
     },
     "tooltip": {
       "installed": "Already in the workspace",
-      "remove": "Click to remove from this agent",
+      "remove": "Click to remove from this project",
       "conflict": "Rename the skill in your library first",
-      "unavailable": "Select a target agent first"
+      "unavailable": "Not available in this project"
     }
   },
   "preset": {
@@ -526,7 +518,7 @@
   },
   "project": {
     "noSkills": "No skills in this project",
-    "noSkillsHint": "No agent skills directories found. Create a skills directory (e.g. .claude/skills/) and add skill folders.",
+    "noSkillsHint": "No skills under this project's .agents/skills directory. Create .agents/skills/ and add skill folders, or add skills from the library.",
     "addManual": "Select Repository Directory",
     "scanDir": "Scan Directory",
     "scanDirPlaceholder": "Enter root directory to scan, e.g. ~/Work",
@@ -578,7 +570,6 @@
     "docTabs": {
       "center": "Center"
     },
-    "moreAgents": "More agents ({{count}})",
     "deleteSkill": "Delete skill",
     "deleteSkillConfirm": "Permanently delete skill \"{{name}}\"? This action cannot be undone.",
     "skillDeleted": "\"{{name}}\" deleted",

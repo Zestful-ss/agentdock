@@ -164,13 +164,10 @@ The repository includes an agent-friendly CLI built on the same Rust shared core
 npm run cli -- skills list
 npm run cli -- skills show db
 
-# Install into the library (does NOT deploy to any agent by itself)
+# Install into the library (canonical .agents/skills only — harnesses observe, never write)
 npm run cli -- skills install ./my-skill
 npm run cli -- skills install https://github.com/foo/bar/tree/main/skills/baz
 npm run cli -- skills install vercel-labs/agent-skills@react-best-practices
-
-# Put it into the agents that should have it, then check
-npm run cli -- skills deploy react-best-practices --agent claude_code --agent codex
 npm run cli -- skills status react-best-practices
 
 # Pull upstream changes, and adopt what an agent already has
@@ -186,13 +183,13 @@ each carry more than these examples show, and destructive commands take
 Available command groups:
 - `repo` — inspect or change the configured base directory
 - `agents` (`tools` alias) — list agents and globally enable or disable them
-- `skills` — manage the central library and real per-agent deployments (`deploy / undeploy / status`)
-- `presets` — create, update, delete, organize, deploy, undeploy, and inspect presets
+- `skills` — manage the central library (`list` / `show` / `install` / `update` / `remove` / `status` / tags / presets membership)
+- `presets` — create, update, delete, organize, and inspect presets
 - `git` — operate on the git-backed `skills/` repository (`clone`, `pull`, `push`, `commit`, `versions`, `restore`)
 
 Extra flags:
 - `--skills-root <path>` — operate on a cloned/exported skills repo directly instead of the local app default. The manager's state (DB, presets, cache, logs) lives in `~/.skills-manager/external/<name>-<hash>/`, namespaced by the canonical path of the skills root, so the external checkout itself stays clean.
-- `--json` — machine-readable output for scripts/agents. Failures print `{"ok": false, "code": …, "message": …}` on stderr with a non-zero exit. A deployment refused because the target is not ours carries the paths as data (`code: "TARGET_CONFLICT"`, `details.conflicts[].path`) so a caller can name the directory in the way instead of quoting a sentence.
+- `--json` — machine-readable output for scripts/agents. Failures print `{"ok": false, "code": …, "message": …}` on stderr with a non-zero exit.
 
 ```bash
 npm run -s cli -- --skills-root /path/to/my-skills --json skills list

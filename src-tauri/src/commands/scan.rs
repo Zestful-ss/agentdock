@@ -4,7 +4,9 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::core::{
-    canonical, content_hash, error::AppError, scanner, skill_metadata, skill_store::SkillStore,
+    canonical,
+    canonical::{UserSkillRegistration},
+    content_hash, error::AppError, scanner, skill_metadata, skill_store::SkillStore,
     sync_metadata, tool_adapters,
 };
 
@@ -116,34 +118,20 @@ pub async fn import_existing_skill(
             let meta = skill_metadata::parse_skill_md(&installed);
             let hash = content_hash::hash_directory(&installed).map_err(AppError::io)?;
 
-            let now = chrono::Utc::now().timestamp_millis();
-            let id = uuid::Uuid::new_v4().to_string();
+            canonical::register_user_skill(
+                &store,
+                &UserSkillRegistration {
+                    name: clean,
+                    description: meta.description,
+                    central_path: installed,
+                    content_hash: hash,
+                    source_type: "import".to_string(),
+                    source_ref: Some(source_path),
+                },
+            )
+            .map_err(anyhow::Error::from)?;
 
-            let record = crate::core::skill_store::SkillRecord {
-                id: id.clone(),
-                name: clean,
-                description: meta.description,
-                source_type: "import".to_string(),
-                source_ref: Some(source_path),
-                source_ref_resolved: None,
-                source_subpath: None,
-                source_branch: None,
-                source_revision: None,
-                remote_revision: None,
-                central_path: installed.to_string_lossy().to_string(),
-                content_hash: Some(hash),
-                enabled: true,
-                created_at: now,
-                updated_at: now,
-                status: "ok".to_string(),
-                update_status: "local_only".to_string(),
-                last_checked_at: Some(now),
-                last_check_error: None,
-            };
-
-            store.insert_skill(&record)?;
-
-            sync_metadata::write_all_from_db_unlocked(&store)
+            Ok(())
         })
         .map_err(AppError::db)?;
 
@@ -160,8 +148,6 @@ pub async fn import_all_discovered(store: State<'_, Arc<SkillStore>>) -> Result<
             let discovered = store.get_all_discovered()?;
             let groups = scanner::group_discovered(&discovered);
             let root = canonical::resolve_user_root()?;
-
-            let mut changed = false;
 
             for group in groups {
                 if group.imported {
@@ -189,37 +175,20 @@ pub async fn import_all_discovered(store: State<'_, Arc<SkillStore>>) -> Result<
                             Err(_) => continue,
                         };
 
-                        let now = chrono::Utc::now().timestamp_millis();
-                        let id = uuid::Uuid::new_v4().to_string();
-                        let record = crate::core::skill_store::SkillRecord {
-                            id: id.clone(),
-                            name: clean,
-                            description: meta.description,
-                            source_type: "import".to_string(),
-                            source_ref: Some(first.found_path.clone()),
-                            source_ref_resolved: None,
-                            source_subpath: None,
-                            source_branch: None,
-                            source_revision: None,
-                            remote_revision: None,
-                            central_path: installed.to_string_lossy().to_string(),
-                            content_hash: Some(hash),
-                            enabled: true,
-                            created_at: now,
-                            updated_at: now,
-                            status: "ok".to_string(),
-                            update_status: "local_only".to_string(),
-                            last_checked_at: Some(now),
-                            last_check_error: None,
-                        };
-                        store.insert_skill(&record)?;
-                        changed = true;
+                        canonical::register_user_skill(
+                            &store,
+                            &UserSkillRegistration {
+                                name: clean,
+                                description: meta.description,
+                                central_path: installed,
+                                content_hash: hash,
+                                source_type: "import".to_string(),
+                                source_ref: Some(first.found_path.clone()),
+                            },
+                        )
+                        .map_err(anyhow::Error::from)?;
                     }
                 }
-            }
-
-            if changed {
-                sync_metadata::write_all_from_db_unlocked(&store)?;
             }
 
             Ok(())

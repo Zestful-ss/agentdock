@@ -28,18 +28,14 @@ import { ConfirmDialog } from "../components/ConfirmDialog";
 import { MultiSelectToolbar } from "../components/MultiSelectToolbar";
 import { BatchTagDialog } from "../components/BatchTagDialog";
 import { DetailSheet } from "../components/DetailSheet";
-import { ProjectAgentDots } from "../components/ProjectAgentDots";
 import { SkillMarkdown } from "../components/SkillMarkdown";
 import { DocumentDiffViewer } from "../components/DocumentDiffViewer";
 import { getTagActiveColor, getTagColor, pruneStaleTagFilters, UNTAGGED_FILTER } from "../lib/skillTags";
-import { enabledInstalledAgentKeys, getDefaultExportAgents } from "../lib/exportAgents";
 import { cn } from "../utils";
 import * as api from "../lib/tauri";
-import type { ProjectSkill, ManagedSkill, ProjectAgentTarget } from "../lib/tauri";
+import type { ProjectSkill, ManagedSkill } from "../lib/tauri";
 import { getErrorMessage } from "../lib/error";
 import { AddSkillsSheet } from "../components/AddSkillsSheet";
-const projectLastUsedAgentsKey = (projectId: string) =>
-  `project_last_used_export_agents:${projectId}`;
 
 interface ProjectSkillGroup {
   id: string;
@@ -87,22 +83,6 @@ function getSyncStatusMeta(t: (key: string) => string, status: ProjectSkill["syn
   }
 }
 
-function getAssignedAgents(variants: ProjectSkill[]) {
-  return Array.from(new Set(variants.map((variant) => variant.agent))).sort();
-}
-
-function getAgentDotTargets(variants: ProjectSkill[]) {
-  const seen = new Set<string>();
-  const targets: { key: string; display_name: string }[] = [];
-  for (const v of variants) {
-    if (!seen.has(v.agent)) {
-      seen.add(v.agent);
-      targets.push({ key: v.agent, display_name: v.agent_display_name });
-    }
-  }
-  return targets;
-}
-
 function getGroupStatus(variants: ProjectSkill[]): ProjectSkill["sync_status"] {
   const priority: ProjectSkill["sync_status"][] = [
     "diverged",
@@ -125,7 +105,6 @@ export function ProjectDetail() {
   const { t } = useTranslation();
   const { projects, managedSkills, refreshManagedSkills, refreshPresets, refreshProjects } = useApp();
   const [skills, setSkills] = useState<ProjectSkill[]>([]);
-  const [projectAgentTargets, setProjectAgentTargets] = useState<ProjectAgentTarget[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [filterMode, setFilterMode] = useState<"all" | "enabled" | "disabled">("all");
@@ -196,25 +175,6 @@ export function ProjectDetail() {
     setDetailSkill(null);
     setDocContent(null);
     setCenterDocContent(null);
-  }, [id]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const loadProjectAgentTargets = async () => {
-      if (!id) return;
-      try {
-        const result = await api.getProjectAgentTargets(id);
-        if (!cancelled) {
-          setProjectAgentTargets(result);
-        }
-      } catch (e) {
-        console.error("Failed to load project agent targets:", e);
-      }
-    };
-    loadProjectAgentTargets();
-    return () => {
-      cancelled = true;
-    };
   }, [id]);
 
   useEffect(() => {
@@ -317,84 +277,15 @@ export function ProjectDetail() {
     escapeEnabled: !batchTagDialogOpen && !batchDeleteConfirm,
   });
 
-  const exportTargets = useMemo(() => {
-    if (projectAgentTargets.length > 0) return projectAgentTargets;
-    return [{ key: "claude_code", display_name: "Claude Code", enabled: true, installed: true, is_custom: false }];
-  }, [projectAgentTargets]);
-
-  const projectSkillDirNamesByAgent = useMemo(() => {
-    const map: Record<string, string[]> = {};
-    for (const skill of skills) {
-      if (!map[skill.agent]) {
-        map[skill.agent] = [];
-      }
-      map[skill.agent].push(skill.relative_path.toLowerCase());
-    }
-    return map;
+  const projectSkillDirNames = useMemo(() => {
+    return skills.map((skill) => skill.relative_path.toLowerCase());
   }, [skills]);
 
-  const projectCenterSkillIdsByAgent = useMemo(() => {
-    const map: Record<string, string[]> = {};
-    for (const skill of skills) {
-      if (!skill.center_skill_id) continue;
-      if (!map[skill.agent]) {
-        map[skill.agent] = [];
-      }
-      map[skill.agent].push(skill.center_skill_id);
-    }
-    return map;
+  const projectCenterSkillIds = useMemo(() => {
+    return skills
+      .map((skill) => skill.center_skill_id)
+      .filter((id): id is string => !!id);
   }, [skills]);
-
-  const selectedExportAgents = useMemo(() => getDefaultExportAgents(exportTargets), [exportTargets]);
-
-  const [lastUsedExportAgents, setLastUsedExportAgents] = useState<string[] | null>(null);
-  useEffect(() => {
-    if (!id) return;
-    let cancelled = false;
-    api.getSettings(projectLastUsedAgentsKey(id))
-      .then((raw) => {
-        if (cancelled) return;
-        if (!raw) {
-          setLastUsedExportAgents(null);
-          return;
-        }
-        try {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed)) {
-            setLastUsedExportAgents(parsed.filter((x): x is string => typeof x === "string"));
-            return;
-          }
-        } catch {
-          // fall through
-        }
-        setLastUsedExportAgents(null);
-      })
-      .catch(() => {
-        if (!cancelled) setLastUsedExportAgents(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [id]);
-
-  const handlePersistLastUsedAgents = useCallback(
-    (agents: string[]) => {
-      setLastUsedExportAgents(agents);
-      if (id) {
-        void api.setSettings(projectLastUsedAgentsKey(id), JSON.stringify(agents)).catch(() => {});
-      }
-    },
-    [id],
-  );
-
-  const initialSheetAgents = useMemo(() => {
-    const availableKeys = new Set(enabledInstalledAgentKeys(exportTargets));
-    if (lastUsedExportAgents && lastUsedExportAgents.length > 0) {
-      const filtered = lastUsedExportAgents.filter((k) => availableKeys.has(k));
-      if (filtered.length > 0) return filtered;
-    }
-    return selectedExportAgents.filter((k) => availableKeys.has(k));
-  }, [exportTargets, lastUsedExportAgents, selectedExportAgents]);
 
   const enabledCount = groupedSkills.filter((s) => s.enabledCount > 0).length;
   const allTags = useMemo(() => {
@@ -472,8 +363,7 @@ export function ProjectDetail() {
     try {
       const doc = await api.getProjectSkillDocument(
         id,
-        skill.primaryVariant.relative_path,
-        skill.primaryVariant.agent
+        skill.primaryVariant.relative_path
       );
       setDocContent(doc.content);
     } catch {
@@ -498,6 +388,9 @@ export function ProjectDetail() {
   // to project", which overwrites every variant — and the backend refuses only
   // project_newer, so nothing stops it. Refuse and name the conflict instead,
   // the way 1.34.0 answers a write that would destroy something.
+  //
+  // V1: each group is one canonical row under <repo>/.agents/skills, so there
+  // is only ever one variant to push and no multi-variant conflict path.
   const pushSkillToCenterAndAlign = async (
     skill: ProjectSkillGroup
   ): Promise<{ alignFailed: number; conflicting: number }> => {
@@ -509,23 +402,10 @@ export function ProjectDetail() {
     }
 
     const winner = unproven[0] ?? skill.primaryVariant;
-    await api.updateProjectSkillToCenter(id, winner.relative_path, winner.agent);
+    await api.updateProjectSkillToCenter(id, winner.relative_path);
 
-    // Every remaining variant is in_sync, so pulling the freshly written center
-    // over it discards nothing — and it keeps a multi-agent group from flipping
-    // to "center_newer" off the stale-but-clean siblings right after the user
-    // updated *to* center. Serially: two agents' skills roots can be symlinks
-    // onto one real directory, and each realign removes and rebuilds its
-    // target, so concurrent calls on one path make a call fail for no reason.
-    let alignFailed = 0;
-    for (const variant of skill.variants.filter((v) => v !== winner)) {
-      try {
-        await api.updateProjectSkillFromCenter(id, variant.relative_path, variant.agent);
-      } catch {
-        alignFailed += 1;
-      }
-    }
-    return { alignFailed, conflicting: 0 };
+    // Single-row V1: no sibling variants remain to realign.
+    return { alignFailed: 0, conflicting: 0 };
   };
 
   const handleUpdateCenter = async (skill: ProjectSkillGroup) => {
@@ -558,7 +438,7 @@ export function ProjectDetail() {
     try {
       await Promise.all(
         skill.variants.map((variant) =>
-          api.updateProjectSkillFromCenter(id, variant.relative_path, variant.agent)
+          api.updateProjectSkillFromCenter(id, variant.relative_path)
         )
       );
       if (skill.status === "project_newer") {
@@ -579,7 +459,7 @@ export function ProjectDetail() {
     try {
       await Promise.all(
         deleteTarget.variants.map((variant) =>
-          api.deleteProjectSkill(id, variant.relative_path, variant.agent)
+          api.deleteProjectSkill(id, variant.relative_path)
         )
       );
       toast.success(t("project.skillDeleted", { name: deleteTarget.name }));
@@ -597,7 +477,7 @@ export function ProjectDetail() {
       try {
         await Promise.all(
           skill.variants.map((variant) =>
-            api.deleteProjectSkill(id, variant.relative_path, variant.agent)
+            api.deleteProjectSkill(id, variant.relative_path)
           )
         );
         deleted++;
@@ -678,7 +558,7 @@ export function ProjectDetail() {
         try {
           await Promise.all(
             skill.variants.map((variant) =>
-              api.updateProjectSkillFromCenter(id, variant.relative_path, variant.agent)
+              api.updateProjectSkillFromCenter(id, variant.relative_path)
             )
           );
           updated++;
@@ -1015,7 +895,6 @@ export function ProjectDetail() {
               skill.status === "center_newer" ||
               skill.status === "diverged";
             const statusMeta = getSyncStatusMeta(t, skill.status);
-            const assignedAgents = getAssignedAgents(skill.variants);
 
             if (viewMode === "grid") {
               return (
@@ -1098,12 +977,6 @@ export function ProjectDetail() {
                     </div>
                     {!isMultiSelect && (
                       <div className="flex items-center gap-1.5 shrink-0">
-                        <ProjectAgentDots
-                          assignedAgents={assignedAgents}
-                          targets={exportTargets}
-                          limit={4}
-                          size="sm"
-                        />
                         {canUpdateCenter && (
                           <button
                             onClick={(e) => { e.stopPropagation(); handleUpdateCenter(skill); }}
@@ -1225,12 +1098,6 @@ export function ProjectDetail() {
                       {skill.files.length}
                     </span>
                   )}
-                  <ProjectAgentDots
-                    assignedAgents={assignedAgents}
-                    targets={exportTargets}
-                    limit={4}
-                    size="sm"
-                  />
                 </div>
 
                 {!isMultiSelect && (
@@ -1335,11 +1202,8 @@ export function ProjectDetail() {
             kind: "project",
             projectId: id,
             projectName: project?.name ?? "",
-            exportTargets,
-            projectSkillDirNamesByAgent,
-            projectCenterSkillIdsByAgent,
-            initialSelectedAgents: initialSheetAgents,
-            onPersistLastUsed: handlePersistLastUsedAgents,
+            projectSkillDirNames,
+            projectCenterSkillIds,
           }}
           managedSkills={managedSkills}
           onInstalled={async () => {
@@ -1372,16 +1236,6 @@ function ProjectSkillDetailPanel({
   const meta = (
     <>
       <div className="flex flex-wrap items-center gap-2 text-[12.5px] text-muted">
-        <ProjectAgentDots
-          assignedAgents={getAssignedAgents(skill.variants)}
-          targets={getAgentDotTargets(skill.variants).map((t) => ({
-            key: t.key,
-            display_name: t.display_name,
-            enabled: true,
-            installed: true,
-            is_custom: false,
-          }))}
-        />
         {skill.tags.length > 0 && (
           <>
             <span className="mx-0.5 h-3 w-px bg-border-subtle" />

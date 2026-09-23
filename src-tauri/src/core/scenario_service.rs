@@ -624,21 +624,12 @@ pub fn ensure_default_startup_scenario(store: &SkillStore) -> Result<(), AppErro
         .filter(|id| scenarios.iter().any(|scenario| scenario.id == *id))
         .unwrap_or_else(|| scenarios[0].id.clone());
 
+    // V1: startup only maintains preset state. Harness directories are
+    // observe-only and are never synced (or unsynced) from this path.
     if current_active.as_deref() != Some(desired_active.as_str()) {
-        if let Some(old_active) = current_active.as_deref() {
-            unsync_scenario_skills(store, old_active)?;
-        }
         store
             .set_active_scenario(&desired_active)
             .map_err(AppError::db)?;
-    }
-
-    // Startup policy: a collision must never stop the app from launching. The
-    // colliding skill simply is not deployed, its content is untouched, and the
-    // workspace view shows it as not synced.
-    let refusals = sync_scenario_skills(store, &desired_active)?;
-    for refusal in &refusals {
-        log::warn!("startup sync skipped a target: {refusal}");
     }
     Ok(())
 }

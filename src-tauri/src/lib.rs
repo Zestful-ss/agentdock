@@ -602,27 +602,6 @@ pub fn run() {
                 log::error!("{detail}");
             }
 
-            // One-time repair for skills uploaded before sync targets were
-            // registered on import: they have a center record but no target,
-            // leaving them button-less in the workspace. This scans and hashes
-            // every agent's local skills, so it must NOT block the window
-            // (#248: it ran ~8s synchronously here on every launch). Run it in
-            // the background after the UI is up; the function itself skips the
-            // scan when the stranded set is unchanged from the last attempt.
-            let store_for_backfill = store_for_setup.clone();
-            tauri::async_runtime::spawn_blocking(move || {
-                let step = Instant::now();
-                let repaired =
-                    commands::agent_workspace::backfill_stranded_agent_targets(&store_for_backfill);
-                if repaired > 0 {
-                    log::info!(
-                        "startup: backfilled {} stranded agent skill target(s) in {} ms",
-                        repaired,
-                        step.elapsed().as_millis()
-                    );
-                }
-            });
-
             // Publish the CLI that ships in this bundle to a fixed path so
             // agents can drive Skills Manager without it being on PATH. A
             // ~15 MB copy plus one `--version` run, so never on the UI thread.
@@ -823,7 +802,6 @@ pub fn run() {
             commands::projects::add_linked_workspace,
             commands::projects::remove_project,
             commands::projects::scan_projects,
-            commands::projects::get_project_agent_targets,
             commands::projects::get_project_skills,
             commands::projects::get_project_skill_document,
             commands::projects::import_project_skill_to_center,
@@ -837,7 +815,6 @@ pub fn run() {
             commands::agent_workspace::get_global_local_skills,
             commands::agent_workspace::get_global_local_skill_document,
             commands::agent_workspace::import_global_local_skill_to_center,
-            commands::agent_workspace::update_global_local_skill_from_center,
             commands::agent_workspace::delete_global_local_skill,
             // Presets
             commands::presets::get_presets,

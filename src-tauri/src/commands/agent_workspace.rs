@@ -576,19 +576,7 @@ pub fn backfill_stranded_agent_targets(store: &SkillStore) -> usize {
     repaired
 }
 
-#[tauri::command]
-pub async fn update_global_local_skill_from_center(
-    store: State<'_, Arc<SkillStore>>,
-    agent: String,
-    skill_relative_path: String,
-) -> Result<(), AppError> {
-    let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        update_agent_local_skill_from_center(&store, &agent, &skill_relative_path)
-    })
-    .await?
-}
-
+#[cfg(test)]
 fn update_agent_local_skill_from_center(
     store: &SkillStore,
     agent: &str,
