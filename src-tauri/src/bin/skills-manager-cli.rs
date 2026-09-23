@@ -5,9 +5,10 @@ use std::sync::Arc;
 use anyhow::{Context, anyhow, bail};
 use app_lib::commands::{presets as preset_cmd, skills as cmd, tools as tool_cmd};
 use app_lib::core::{
-    app_state, audit_log::AuditDraft, central_repo, error::AppError, git_backup, git_fetcher,
-    installer, merge, repo_lock::RepoLock, scenario_service, skill_metadata,
-    skill_store::SkillStore, skillssh_api, sync_engine, sync_metadata, tool_adapters, tool_service,
+    app_state, audit_log::AuditDraft, canonical, central_repo, content_hash, error::AppError,
+    git_backup, git_fetcher, installer, merge, repo_lock::RepoLock, scenario_service,
+    skill_metadata, skill_store::SkillStore, skillssh_api, sync_engine, sync_metadata,
+    tool_adapters, tool_service,
 };
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
@@ -1531,7 +1532,30 @@ fn install_local_action(
     }
 
     let _lock = RepoLock::acquire_foreground("cli install local")?;
-    let result = installer::install_from_local(&path, name)?;
+    let resolved = canonical::resolve_user_root().map_err(map_app_err)?;
+    let prepared = installer::prepare_local_source(&path).map_err(|e| anyhow!("{e}"))?;
+    let dest = match name.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(n) => {
+            let clean = canonical::sanitize_component(n).map_err(map_app_err)?;
+            canonical::install_skill_dir_as(prepared.skill_dir(), &resolved, &clean, false)
+                .map_err(map_app_err)?
+        }
+        None => canonical::install_skill_dir(prepared.skill_dir(), &resolved, false)
+            .map_err(map_app_err)?,
+    };
+    let install_name = dest
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let meta = skill_metadata::parse_skill_md(&dest);
+    let hash = content_hash::hash_directory(&dest).map_err(map_app_err)?;
+    let central_path = dest.to_string_lossy().to_string();
+    let result = installer::InstallResult {
+        name: install_name.clone(),
+        description: meta.description,
+        central_path: dest,
+        content_hash: hash,
+    };
     let metadata = cmd::InstallSourceMetadata {
         source_type: "local".to_string(),
         source_ref: Some(path.to_string_lossy().to_string()),
@@ -1542,8 +1566,6 @@ fn install_local_action(
         remote_revision: None,
         update_status: "local_only".to_string(),
     };
-    let central_path = result.central_path.to_string_lossy().to_string();
-    let install_name = result.name.clone();
     let skill_id = cmd::store_installed_skill_unlocked(store, &result, &metadata, active_scenario)
         .map_err(map_app_err)?;
     Ok((skill_id, install_name, central_path, "local".to_string()))
@@ -1568,27 +1590,94 @@ fn install_git_action(
         None,
     )?;
     let result = (|| -> anyhow::Result<(String, String, String)> {
-        let _lock = RepoLock::acquire_foreground("cli install git")?;
         let skill_dir = cmd::resolve_skill_dir(&temp_dir, parsed.subpath.as_deref(), None)
             .map_err(map_app_err)?;
-        let revision = git_fetcher::get_head_revision(&temp_dir)?;
-        let install_result = installer::install_from_git_dir(&skill_dir, name)?;
-        let metadata = cmd::InstallSourceMetadata {
-            source_type: "git".to_string(),
-            source_ref: Some(parsed.original_url.clone()),
-            source_ref_resolved: Some(parsed.clone_url.clone()),
-            source_subpath: git_fetcher::relative_subpath(&temp_dir, &skill_dir),
-            source_branch: parsed.branch.clone(),
-            source_revision: Some(revision.clone()),
-            remote_revision: Some(revision),
-            update_status: "up_to_date".to_string(),
-        };
-        let central_path = install_result.central_path.to_string_lossy().to_string();
-        let install_name = install_result.name.clone();
-        let skill_id =
-            cmd::store_installed_skill_unlocked(store, &install_result, &metadata, active_scenario)
+        let dirs = cmd::collect_git_skill_dirs(&skill_dir);
+        if dirs.is_empty() {
+            bail!("no skills found in repository");
+        }
+        let single = dirs.len() == 1;
+        let items: Vec<cmd::SkillInstallItem> = dirs
+            .iter()
+            .map(|d| {
+                let rel_path = cmd::skill_rel_key(&skill_dir, d);
+                let meta = skill_metadata::parse_skill_md(d);
+                let default_name = meta
+                    .name
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or_else(|| {
+                        d.file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| rel_path.clone())
+                    });
+                let final_name = if single {
+                    name.unwrap_or(&default_name).to_string()
+                } else {
+                    default_name
+                };
+                cmd::SkillInstallItem {
+                    rel_path,
+                    name: final_name,
+                }
+            })
+            .collect();
+
+        let outcomes = cmd::confirm_git_install_inner(
+            store,
+            repo_url,
+            &temp_dir,
+            &items,
+            "user",
+            None,
+            false,
+            proxy_url.as_deref(),
+        )
+        .map_err(map_app_err)?;
+
+        let installed: Vec<_> = outcomes
+            .iter()
+            .filter(|o| o.status == "installed")
+            .collect();
+        let failed: Vec<_> = outcomes
+            .iter()
+            .filter(|o| o.status != "installed")
+            .collect();
+        if !failed.is_empty() {
+            let details: Vec<String> = failed
+                .iter()
+                .map(|o| {
+                    o.error
+                        .clone()
+                        .unwrap_or_else(|| format!("{}: {}", o.name, o.status))
+                })
+                .collect();
+            bail!("git install failed: {}", details.join("; "));
+        }
+        let first = installed
+            .first()
+            .ok_or_else(|| anyhow!("git install produced no outcomes"))?;
+        let dest_path = first
+            .dest_path
+            .clone()
+            .ok_or_else(|| anyhow!("git install missing destination path"))?;
+
+        let record = store
+            .get_skill_by_central_path(&dest_path)
+            .map_err(map_app_err)?
+            .ok_or_else(|| anyhow!("installed skill not found in index: {dest_path}"))?;
+
+        if let Some(scenario_id) = active_scenario {
+            store
+                .add_skill_to_scenario(scenario_id, &record.id)
                 .map_err(map_app_err)?;
-        Ok((skill_id, install_name, central_path))
+            if let Err(e) =
+                scenario_service::sync_skill_to_active_scenario(store, scenario_id, &record.id)
+            {
+                log::warn!("Failed to sync git-installed skill to preset: {e}");
+            }
+        }
+
+        Ok((record.id, first.name.clone(), dest_path))
     })();
     git_fetcher::cleanup_temp(&temp_dir);
     let (skill_id, install_name, central_path) = result?;

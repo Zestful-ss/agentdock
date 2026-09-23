@@ -901,10 +901,36 @@ pub async fn install_local(
             };
             let _lock =
                 RepoLock::acquire_foreground("install local skill").map_err(AppError::db)?;
-            let result =
-                installer::install_from_local(&path, name.as_deref()).map_err(AppError::io)?;
-            let skill_name = result.name.clone();
-            // Install only adds the skill to the central library; preset
+            let resolved = crate::core::canonical::resolve_user_root()?;
+            let prepared = installer::prepare_local_source(&path).map_err(AppError::io)?;
+            let dest = match name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+                Some(n) => {
+                    let clean = crate::core::canonical::sanitize_component(n)?;
+                    crate::core::canonical::install_skill_dir_as(
+                        prepared.skill_dir(),
+                        &resolved,
+                        &clean,
+                        false,
+                    )?
+                }
+                None => {
+                    crate::core::canonical::install_skill_dir(prepared.skill_dir(), &resolved, false)?
+                }
+            };
+            let skill_name = dest
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let meta = skill_metadata::parse_skill_md(&dest);
+            let hash =
+                crate::core::content_hash::hash_directory(&dest).map_err(AppError::io)?;
+            let result = installer::InstallResult {
+                name: skill_name.clone(),
+                description: meta.description,
+                central_path: dest,
+                content_hash: hash,
+            };
+            // Install only adds the skill to the canonical library; preset
             // membership is an explicit action (see issue #213).
             let skill_id = store_installed_skill_unlocked(&store, &result, &metadata, None)?;
             Ok((skill_id, skill_name))
@@ -913,110 +939,6 @@ pub async fn install_local(
         outcome.map(|_| ())
     })
     .await?
-}
-
-#[tauri::command]
-pub async fn install_git(
-    repo_url: String,
-    name: Option<String>,
-    store: State<'_, Arc<SkillStore>>,
-    cancel_registry: State<'_, Arc<InstallCancelRegistry>>,
-    app_handle: tauri::AppHandle,
-) -> Result<(), AppError> {
-    let store = store.inner().clone();
-    let proxy_url = store.proxy_url();
-    let registry = cancel_registry.inner().clone();
-    let cancel_key = repo_url.clone();
-    let cancel = registry.register(&cancel_key);
-    let _cancel_guard = CancelRegistrationGuard::new(registry.clone(), cancel_key);
-
-    tauri::async_runtime::spawn_blocking(move || {
-        use tauri::Emitter;
-        let emit_progress = |phase: &str| {
-            app_handle
-                .emit(
-                    "install-progress",
-                    serde_json::json!({
-                        "skill_id": repo_url,
-                        "phase": phase,
-                    }),
-                )
-                .ok();
-        };
-
-        let outcome = (|| -> Result<(String, String), AppError> {
-            git_fetcher::validate_git_url(&repo_url).map_err(AppError::git)?;
-            emit_progress("cloning");
-            let parsed = git_fetcher::parse_git_source_resolved(&repo_url, proxy_url.as_deref());
-            let app_for_progress = app_handle.clone();
-            let url_for_progress = repo_url.clone();
-            let progress_cb: git_fetcher::ProgressCallback = Box::new(move |msg: &str| {
-                app_for_progress
-                    .emit(
-                        "install-progress",
-                        serde_json::json!({
-                            "skill_id": url_for_progress,
-                            "phase": "cloning",
-                            "detail": msg,
-                        }),
-                    )
-                    .ok();
-            });
-            let temp_dir = git_fetcher::clone_repo_ref_scoped(
-                &parsed.clone_url,
-                parsed.branch.as_deref(),
-                parsed.subpath.as_deref(),
-                Some(&cancel),
-                proxy_url.as_deref(),
-                Some(progress_cb),
-            )
-            .map_err(AppError::classify_git_error)?;
-
-            emit_progress("installing");
-            let install_result = (|| -> Result<(String, String), AppError> {
-                let _lock =
-                    RepoLock::acquire_foreground("install git skill").map_err(AppError::db)?;
-                let skill_dir = resolve_skill_dir(&temp_dir, parsed.subpath.as_deref(), None)?;
-                let revision = git_fetcher::get_head_revision(&temp_dir).map_err(AppError::git)?;
-                let result = installer::install_from_git_dir(&skill_dir, name.as_deref())
-                    .map_err(AppError::io)?;
-                let metadata = InstallSourceMetadata {
-                    source_type: "git".to_string(),
-                    source_ref: Some(parsed.original_url.clone()),
-                    source_ref_resolved: Some(parsed.clone_url.clone()),
-                    source_subpath: git_fetcher::relative_subpath(&temp_dir, &skill_dir),
-                    source_branch: parsed.branch.clone(),
-                    source_revision: Some(revision.clone()),
-                    remote_revision: Some(revision),
-                    update_status: "up_to_date".to_string(),
-                };
-                let skill_name = result.name.clone();
-                let skill_id = store_installed_skill_unlocked(&store, &result, &metadata, None)?;
-                Ok((skill_id, skill_name))
-            })();
-
-            git_fetcher::cleanup_temp(&temp_dir);
-            install_result
-        })();
-
-        log_install_outcome(&store, "git", outcome.as_ref());
-        outcome?;
-
-        emit_progress("done");
-        Ok(())
-    })
-    .await?
-}
-
-#[tauri::command]
-pub async fn install_from_skillssh(
-    _source: String,
-    _skill_id: String,
-    _store: State<'_, Arc<SkillStore>>,
-    _cancel_registry: State<'_, Arc<InstallCancelRegistry>>,
-    _app_handle: tauri::AppHandle,
-) -> Result<(), AppError> {
-    Err(crate::core::v1::blocked_write())
 }
 
 /// Clone a git repo and return a preview list of skills found, without installing.
@@ -1164,9 +1086,9 @@ pub async fn confirm_git_install(
 }
 
 /// Inner install loop, split out for tests (the command adds temp validation
-/// and temp lifecycle around it).
+/// and temp lifecycle around it). Also used by the CLI for git installs.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn confirm_git_install_inner(
+pub fn confirm_git_install_inner(
     store: &SkillStore,
     repo_url: &str,
     temp_path: &Path,
@@ -3400,6 +3322,7 @@ pub async fn batch_import_folder(
         let mut imported = 0usize;
         let mut skipped = 0usize;
         let mut errors = Vec::new();
+        let resolved = crate::core::canonical::resolve_user_root()?;
 
         for (i, dir) in skill_dirs.iter().enumerate() {
             let name = skill_metadata::infer_skill_name(dir);
@@ -3415,8 +3338,8 @@ pub async fn batch_import_folder(
                 )
                 .ok();
 
-            // Check if already imported by prospective central path
-            let prospective_central = central_repo::skills_dir().join(&name);
+            // Check if already imported by prospective canonical path
+            let prospective_central = resolved.root.join(&name);
             let central_str = prospective_central.to_string_lossy().to_string();
             if let Ok(Some(_)) = store.get_skill_by_central_path(&central_str) {
                 skipped += 1;
@@ -3426,8 +3349,21 @@ pub async fn batch_import_folder(
             let install_result = (|| -> Result<String, AppError> {
                 let _lock =
                     RepoLock::acquire_foreground("batch import skill").map_err(AppError::db)?;
-                let result =
-                    installer::install_from_local(dir, Some(&name)).map_err(AppError::io)?;
+                let dest = crate::core::canonical::install_skill_dir_as(
+                    dir,
+                    &resolved,
+                    &name,
+                    false,
+                )?;
+                let meta = skill_metadata::parse_skill_md(&dest);
+                let hash =
+                    crate::core::content_hash::hash_directory(&dest).map_err(AppError::io)?;
+                let result = installer::InstallResult {
+                    name: name.clone(),
+                    description: meta.description,
+                    central_path: dest,
+                    content_hash: hash,
+                };
                 let metadata = InstallSourceMetadata {
                     source_type: "local".to_string(),
                     source_ref: Some(dir.to_string_lossy().to_string()),

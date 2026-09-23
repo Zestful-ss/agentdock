@@ -79,6 +79,23 @@ impl PreparedSource {
     }
 }
 
+/// Prepared local source kept alive for the duration of a canonical install
+/// (archive extraction lives in a temp dir that must not be dropped early).
+pub struct PreparedLocal {
+    inner: PreparedSource,
+}
+
+impl PreparedLocal {
+    pub fn skill_dir(&self) -> &Path {
+        self.inner.skill_dir()
+    }
+}
+
+/// Open a local directory or archive (`.zip` / `.skill`) for installation.
+pub fn prepare_local_source(source: &Path) -> Result<PreparedLocal> {
+    PreparedSource::open(source).map(|inner| PreparedLocal { inner })
+}
+
 pub fn install_from_local(source: &Path, name: Option<&str>) -> Result<InstallResult> {
     let prepared = PreparedSource::open(source)?;
     let skill_dir = prepared.skill_dir();
