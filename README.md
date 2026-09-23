@@ -157,7 +157,7 @@ npm run tauri:dev
 
 ### CLI
 
-The repository includes an agent-friendly CLI built on the same Rust shared core used by the desktop app. Both the CLI and the desktop app go through the same SQLite database, central library, and sync engine.
+The repository includes an agent-friendly CLI built on the same Rust shared core used by the desktop app. Both the CLI and the desktop app use the same canonical `.agents` roots and metadata index; Harness directories remain read-only discovery sources.
 
 ```bash
 # Look around
@@ -182,8 +182,8 @@ each carry more than these examples show, and destructive commands take
 
 Available command groups:
 - `repo` — inspect or change the configured base directory
-- `agents` (`tools` alias) — list agents and globally enable or disable them
-- `skills` — manage the central library (`list` / `show` / `install` / `update` / `remove` / `status` / tags / presets membership)
+- `agents` (`tools` alias) — list observed harnesses and include/exclude discovery sources
+- `skills` — manage the canonical library (`list` / `show` / `install` / `update` / `remove` / `status` / tags / presets membership)
 - `presets` — create, update, delete, organize, and inspect presets
 - `git` — operate on the git-backed `skills/` repository (`clone`, `pull`, `push`, `commit`, `versions`, `restore`)
 
@@ -213,7 +213,7 @@ Official releases also publish standalone CLI binaries for macOS arm64/x64, Wind
 
 #### Concurrent use with the desktop app
 
-The CLI and desktop app share the same SQLite database and repository lock. The app's filesystem watcher normally refreshes after CLI metadata or deployment changes. If the app was suspended while a command ran, trigger one manual refresh.
+The CLI and desktop app share the same SQLite metadata index and repository lock. The app's filesystem watcher normally refreshes after canonical skill changes. If the app was suspended while a command ran, trigger one manual refresh.
 
 ### Build
 

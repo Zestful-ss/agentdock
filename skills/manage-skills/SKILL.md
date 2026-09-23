@@ -63,7 +63,7 @@ Internally, presets are still stored as scenarios for backward-compatible Git Ba
 ## Install
 
 ```bash
-# From skills.sh marketplace
+# From a skills.sh-compatible GitHub source
 "$SM" skills install vercel-labs/agent-skills@react-best-practices
 
 # Any git URL (use /tree/branch/subpath form when the skill lives in a sub-directory)
@@ -86,7 +86,7 @@ Internally, presets are still stored as scenarios for backward-compatible Git Ba
 3. Matches `owner/repo`, `owner/repo/skill`, or `owner/repo@skill` → skillssh
 4. Otherwise → error; pass `--local` / `--git` / `--skillssh` to disambiguate
 
-**Always verify after install** with `skills list` or `skills show <name>` so you can confirm the skill landed and report the preset / sync state back to the user.
+**Always verify after install** with `skills list` or `skills show <name>` so you can confirm the skill landed and report its canonical path and preset membership.
 
 ## Search
 
@@ -118,9 +118,9 @@ Each result has `install_ref` (paste straight into `skills install`), `installs`
   "held_back_removals": ["library: templates/mine.pptx"] }
 ```
 
-The field is omitted entirely when nothing is held back, so test for its presence rather than for an empty array. `refreshed: false` *with* `held_back_removals` is **not a failure and not something to retry** — the skill is untouched and still on its old version. Show the user the listed paths and ask. There is no CLI flag to override this; only the desktop app can confirm and proceed, because only a person can say those files are expendable. The paths are prefixed with where they live (`library`, or an agent key for a deployed copy).
+The field is omitted entirely when nothing is held back, so test for its presence rather than for an empty array. `refreshed: false` *with* `held_back_removals` is **not a failure and not something to retry** — the skill is untouched and still on its old version. Show the user the listed paths and ask. There is no CLI flag to override this; only the desktop app can confirm and proceed, because only a person can say those files are expendable. The paths are relative to the canonical library.
 
-Note what this does *not* cover: a file the user edited that the new version also ships is reported as surviving, because its path survives — the update overwrites their edits silently. Warn anyone keeping local modifications inside a skill folder.
+Note that the update path also compares the live canonical directory with the indexed hash. If the managed copy was edited locally, the update stops with a conflict instead of overwriting that edit.
 
 ## Remove
 
@@ -132,9 +132,9 @@ Note what this does *not* cover: a file the user edited that the new version als
 "$SM" skills remove <skill> --yes
 ```
 
-Remove deletes the central-library copy, all harness target rows for that skill, and the DB row. It's not reversible without re-installing.
+Remove deletes the canonical library directory and its metadata row. Legacy Harness target rows are removed from the index only; Harness files are never touched.
 
-## Observe deployment state (read-only)
+## Observe discovery state (read-only)
 
 ```bash
 "$SM" --json skills status <skill>
@@ -144,7 +144,7 @@ Remove deletes the central-library copy, all harness target rows for that skill,
 
 ## Adopt skills installed elsewhere
 
-When skills already live in an agent's directory (e.g. installed via `npx skills add` or manual `git clone`) but aren't in the central library, pull them in:
+When skills already live in a Harness directory (e.g. installed via `npx skills add` or a manual `git clone`) but aren't in the canonical library, adopt them:
 
 ```bash
 # Dry-run scan first — lists candidates without writing
@@ -167,7 +167,7 @@ When skills already live in an agent's directory (e.g. installed via `npx skills
   --git-url https://github.com/me/my-skill --git-subpath ""
 ```
 
-`adopt` auto-excludes anything already in the DB or already a sync target, so it's safe to re-run. `--git-url` requires either a URL with a subpath (`/tree/branch/path`) or an explicit `--git-subpath` — without that, future `update` would re-clone the wrong directory, so the CLI refuses to guess.
+`adopt` is safe to re-run: already managed canonical paths are excluded, while the discovered source directory remains untouched. `--git-url` requires either a URL with a subpath (`/tree/branch/path`) or an explicit `--git-subpath` — without that, future `update` would re-clone the wrong directory, so the CLI refuses to guess.
 
 `--git-url` only applies at the moment of adoption, while the directory is still unmanaged. Once a skill is in the library, use `set-source` below.
 
@@ -188,7 +188,7 @@ so the skill id survives and the tags and preset membership keyed to it all stay
 
 - The flag is `--subpath` here, not `--git-subpath` — that one belongs to `adopt`. Pass `--subpath ""` when the skill is at the repo root, which must itself hold a `SKILL.md`.
 - `--branch` overrides a branch encoded in the URL.
-- The report carries `content_changed` — a single boolean, **not** a file list. It compares the new source against the hash currently recorded for the library copy, not a fresh hash of the directory on disk, so edits made inside the central copy afterwards do not register as a difference. When it is `false` the library copy is left untouched and those edits survive.
+- The report carries `content_changed` — a single boolean, **not** a file list. A replacement also verifies the live canonical hash; if the managed copy was edited locally, it refuses to apply the update until the conflict is resolved.
 
 **`--force` is destructive, and nothing stands between it and the user's files.**
 A content difference is refused without it. With it, the whole skill directory is

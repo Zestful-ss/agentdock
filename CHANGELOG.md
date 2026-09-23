@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Developer & Governance
+- **V1.1 hardening** — Tool toggles and path edits are discovery-only; Preset CRUD no longer performs Harness synchronization; linked project workspaces and project `skills-disabled` entry points are removed.
+- **Canonical integrity** — Managed deletion and skills.sh CLI installation use the canonical writer; project creation initializes only `<repo>/.agents/skills`; updates pause when the live canonical copy was edited locally.
+- **Reliability** — Project inventory is single-level and read-only, Git ref queries have a bounded timeout, scan/adopt results are reconciled under the repository lock, and frontend CI now runs build/lint/i18n checks.
+
 ## [1.41.0] - 2026-09-23
 
 ### Release Overview

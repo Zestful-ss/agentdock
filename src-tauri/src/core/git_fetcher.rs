@@ -942,6 +942,39 @@ fn run_git_watched(
     }
 }
 
+/// Run a read-only git command with the same bounded lifetime as clone/checkout
+/// operations, while preserving stdout for ref parsing.
+fn run_git_capture_with_timeout(mut command: Command) -> Result<String> {
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("Failed to start git")?;
+    let deadline = Instant::now() + Duration::from_secs(CLONE_TIMEOUT_SECS);
+
+    loop {
+        match child.try_wait()? {
+            Some(status) => {
+                let output = child.wait_with_output()?;
+                if !status.success() {
+                    bail!(
+                        "git exited with {}: {}",
+                        status,
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    );
+                }
+                return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
+            }
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                bail!("git timed out after {}s", CLONE_TIMEOUT_SECS);
+            }
+            None => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
+}
+
 fn clone_repo_full(
     url: &str,
     branch: Option<&str>,
@@ -1513,16 +1546,11 @@ fn list_remote_ref_names(url: &str, proxy_url: Option<&str>) -> Result<RemoteRef
         cmd.arg("-c").arg(format!("http.proxy={proxy}"));
         cmd.arg("-c").arg(format!("https.proxy={proxy}"));
     }
-    let output = cmd
-        .args(["ls-remote", "--heads", "--tags", url])
-        .output()
-        .with_context(|| format!("Failed to list remote refs for {}", url))?;
+    let stdout = run_git_capture_with_timeout(
+        cmd.args(["ls-remote", "--heads", "--tags", url]),
+    )
+    .with_context(|| format!("Failed to list remote refs for {}", url))?;
 
-    if !output.status.success() {
-        anyhow::bail!("git ls-remote exited with {}", output.status);
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
     Ok(parse_remote_ref_names(&stdout))
 }
 
@@ -1598,15 +1626,8 @@ fn resolve_remote_revision_with_git(
     }
     cmd.args(["ls-remote", url]);
     cmd.args(&candidates);
-    let output = cmd
-        .output()
+    let stdout = run_git_capture_with_timeout(cmd)
         .with_context(|| format!("Failed to query remote {}", url))?;
-
-    if !output.status.success() {
-        anyhow::bail!("git ls-remote exited with {}", output.status);
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
     select_remote_revision(&stdout, &candidates)
         .ok_or_else(|| anyhow::anyhow!("No remote revision found"))
 }
