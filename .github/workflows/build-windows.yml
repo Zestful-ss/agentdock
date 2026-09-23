@@ -1,0 +1,69 @@
+name: Build Windows Installer
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    name: Build (Windows-x64)
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust dependencies
+        uses: swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: src-tauri
+          # Restore-only: Windows cache save intermittently fails when a
+          # lingering vctip.exe locks files under target/ (same as release.yml).
+          save-if: false
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build installers (NSIS + MSI, no updater artifacts)
+        run: >-
+          npx tauri build
+          --target x86_64-pc-windows-msvc
+          --config "{\"bundle\":{\"createUpdaterArtifacts\":false,\"targets\":[\"nsis\",\"msi\"]}}"
+
+      - name: Collect installers
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          $exe = @(Get-ChildItem -Path "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis" -Filter *.exe -ErrorAction SilentlyContinue)
+          $msi = @(Get-ChildItem -Path "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi" -Filter *.msi -ErrorAction SilentlyContinue)
+          if ($exe.Count -eq 0 -and $msi.Count -eq 0) {
+            throw "No .exe or .msi produced under bundle/nsis or bundle/msi"
+          }
+          $all = $exe + $msi
+          foreach ($f in $all) {
+            Copy-Item -LiteralPath $f.FullName -Destination out/
+            Write-Host "collected $($f.Name) ($($f.Length) bytes)"
+          }
+          Get-ChildItem out | Format-Table Name, Length
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: skills-manager-windows-installer
+          path: out/*
+          retention-days: 30
+          if-no-files-found: error
