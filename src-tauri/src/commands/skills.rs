@@ -9,7 +9,8 @@ use walkdir::WalkDir;
 
 use crate::core::{
     audit_log::AuditDraft,
-    canonical, central_repo,
+    canonical,
+    content_hash,
     error::AppError,
     git_fetcher,
     install_cancel::InstallCancelRegistry,
@@ -21,6 +22,8 @@ use crate::core::{
     sync_metadata,
     timing::should_log_first_or_slow,
 };
+#[cfg(test)]
+use crate::core::central_repo;
 
 #[derive(Debug, Serialize)]
 pub struct UpdateSkillResult {

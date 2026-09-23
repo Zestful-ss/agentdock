@@ -10,10 +10,8 @@ use crate::commands::projects::{
 use crate::core::skill_store::{SkillRecord, SkillStore, SkillTargetRecord};
 use crate::core::{
     canonical, content_hash, error::AppError, project_scanner, skill_metadata, sync_metadata,
-    tool_adapters, tool_service,
+    tool_adapters,
 };
-#[cfg(test)]
-use crate::core::{installer, scenario_service, sync_engine};
 
 fn adapter_for_agent(
     store: &SkillStore,
