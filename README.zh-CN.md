@@ -54,13 +54,7 @@
 
 ### macOS
 
-使用 [Homebrew](https://brew.sh) 安装：
-
-```bash
-brew install --cask skills-manager
-```
-
-也可以从[最新 Release](https://github.com/Zestful-ss/agentdock/releases/latest)下载 `.dmg`。
+AgentDock 的 Homebrew cask 将随首个 AgentDock Release 一起迁移。在 cask 发布前，请从[最新 Release](https://github.com/Zestful-ss/agentdock/releases/latest)下载 `.dmg`。
 
 ### Windows 和 Linux
 
