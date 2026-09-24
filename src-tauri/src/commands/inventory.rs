@@ -26,7 +26,7 @@ fn is_same_or_descendant(path: &std::path::Path, root: &std::path::Path) -> bool
     }
     let separator = std::path::MAIN_SEPARATOR;
     let prefix = if root_key.ends_with(separator) {
-        root_key
+        root_key.clone()
     } else {
         format!("{root_key}{separator}")
     };
