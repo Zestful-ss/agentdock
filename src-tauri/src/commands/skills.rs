@@ -2428,6 +2428,10 @@ pub fn set_git_source_internal(
             ));
         }
 
+        if content_changed {
+            ensure_live_skill_unchanged(&current)?;
+        }
+
         store
             .update_skill_update_status(skill_id, "updating")
             .map_err(AppError::db)?;
@@ -3755,6 +3759,30 @@ mod tests {
             reimport_local_skill_internal(&repo.store, "skill-1", Some(&approved)).unwrap();
         assert!(third.pending_removals.is_empty());
         assert!(!central.join("mine.txt").exists(), "the approved removal applies");
+    }
+
+    #[test]
+    fn reimport_rejects_a_local_edit_before_replacing_the_canonical_copy() {
+        let repo = test_repo();
+        let source = repo._tmp.path().join("source");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("SKILL.md"), "---\nname: gen\n---\nsource\n").unwrap();
+
+        let central = write_skill_dir("gen");
+        fs::write(central.join("SKILL.md"), "---\nname: gen\n---\noriginal\n").unwrap();
+        let mut record = sample_skill("skill-1", "gen", &central);
+        record.source_type = "local".to_string();
+        record.source_ref = Some(source.to_string_lossy().to_string());
+        record.content_hash = Some(content_hash::hash_directory(&central).unwrap());
+        repo.store.insert_skill(&record).unwrap();
+
+        fs::write(central.join("SKILL.md"), "---\nname: gen\n---\nlocal edit\n").unwrap();
+        let error = reimport_local_skill_internal(&repo.store, "skill-1", None).unwrap_err();
+
+        assert!(error.message.contains("modified locally"));
+        assert!(fs::read_to_string(central.join("SKILL.md"))
+            .unwrap()
+            .contains("local edit"));
     }
 
     fn write_skill_at(root: &Path, rel: &str) -> PathBuf {

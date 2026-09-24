@@ -12,7 +12,7 @@ use crate::core::{
     canonical, content_hash, error::AppError, project_scanner, skill_metadata, sync_metadata,
     tool_adapters,
 };
-#[cfg(test)]
+#[cfg(all(test, feature = "legacy-harness-deploy-tests"))]
 use crate::core::{scenario_service, sync_engine, tool_service};
 
 fn adapter_for_agent(
@@ -276,6 +276,7 @@ fn import_agent_local_skill_to_center(
 /// action. Best-effort: per-skill failures are logged and skipped.
 /// Settings key holding the signature of the stranded-candidate set we last
 /// attempted to backfill. See [`backfill_stranded_agent_targets`] for why.
+#[cfg(all(test, feature = "legacy-harness-deploy-tests"))]
 const BACKFILL_SIG_KEY: &str = "backfill_stranded_candidates_sig";
 
 /// Change detector for one candidate's on-disk state: the same content hash
@@ -285,6 +286,7 @@ const BACKFILL_SIG_KEY: &str = "backfill_stranded_candidates_sig";
 /// just their dirs costs ~ms — nothing like the full scan-and-hash of every
 /// agent the gate exists to avoid. The gate then re-arms exactly when a
 /// candidate's repair inputs changed.
+#[cfg(all(test, feature = "legacy-harness-deploy-tests"))]
 fn dir_content_fingerprint(path: &str) -> String {
     if !Path::new(path).exists() {
         return "missing".to_string();
@@ -304,6 +306,7 @@ fn dir_content_fingerprint(path: &str) -> String {
 /// content fingerprints of its local and central dirs (a diverged local
 /// restored to match center, or center edited to match the local, must
 /// re-arm).
+#[cfg(all(test, feature = "legacy-harness-deploy-tests"))]
 fn stranded_candidate_signature(
     all_managed: &[SkillRecord],
     all_targets: &[SkillTargetRecord],
@@ -358,7 +361,7 @@ fn stranded_candidate_signature(
     Some(hex::encode(hasher.finalize()))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "legacy-harness-deploy-tests"))]
 pub fn backfill_stranded_agent_targets(store: &SkillStore) -> usize {
     let all_managed = store.get_all_skills().unwrap_or_default();
     let all_targets = store.get_all_targets().unwrap_or_default();
@@ -515,7 +518,7 @@ pub fn backfill_stranded_agent_targets(store: &SkillStore) -> usize {
     repaired
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "legacy-harness-deploy-tests"))]
 fn update_agent_local_skill_from_center(
     store: &SkillStore,
     agent: &str,

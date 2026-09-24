@@ -373,14 +373,6 @@ pub(crate) fn sync_scenario_skills(
 }
 
 #[cfg(test)]
-pub(crate) fn unsync_scenario_skills(
-    store: &SkillStore,
-    scenario_id: &str,
-) -> Result<(), AppError> {
-    scenario_service::unsync_scenario_skills(store, scenario_id)
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     #[cfg(unix)]

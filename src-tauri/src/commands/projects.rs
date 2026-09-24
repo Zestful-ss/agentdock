@@ -171,6 +171,7 @@ fn remove_workspace_skill_target(path: &Path) -> Result<(), AppError> {
 // (and including) `root`. Stops at the first non-empty directory or any
 // other error. `fs::remove_dir` only succeeds on empty directories, so this
 // will never delete a directory that still holds skills.
+#[cfg(test)]
 fn cleanup_empty_dirs_up_to(start: &Path, root: &Path) {
     let Ok(root_canonical) = std::fs::canonicalize(root) else {
         return;
