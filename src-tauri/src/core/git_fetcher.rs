@@ -62,6 +62,13 @@ pub fn validate_git_url(url: &str) -> Result<()> {
     let trimmed = url.trim();
     let lower = trimmed.to_lowercase();
 
+    // Local file remotes are useful only for hermetic unit tests. Keep this
+    // exception behind cfg(test); production callers still reject file URLs.
+    #[cfg(test)]
+    if lower.starts_with("file://") {
+        return Ok(());
+    }
+
     // Explicitly allowed schemes
     if lower.starts_with("https://")
         || lower.starts_with("http://")
