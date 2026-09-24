@@ -397,6 +397,29 @@ pub async fn get_adopt_diff(
     .map_err(|e| AppError::internal(e.to_string()))?
 }
 
+fn ensure_replacement_baseline(store: &SkillStore, candidate: &std::path::Path) -> Result<(), AppError> {
+    let Some(record) = store
+        .get_all_skills()
+        .map_err(AppError::db)?
+        .into_iter()
+        .find(|record| paths::same_path(std::path::Path::new(&record.central_path), candidate))
+    else {
+        return Ok(());
+    };
+    let Some(baseline) = record.content_hash.as_deref() else {
+        return Err(AppError::invalid_input(
+            "Managed skill has no recorded baseline; replacement was not applied",
+        ));
+    };
+    let live = content_hash::hash_directory_strict(candidate).map_err(AppError::io)?;
+    if live != baseline {
+        return Err(AppError::invalid_input(
+            "Managed skill was modified locally; replacement was not applied",
+        ));
+    }
+    Ok(())
+}
+
 /// Adopt a discovered skill into User `~/.agents/skills`.
 /// Existing name + `replace != true` → `target_conflict` (frontend: Replace/Cancel).
 ///
@@ -420,29 +443,8 @@ pub async fn adopt_skill_to_user(
             if replace.unwrap_or(false) {
                 let name = skill_metadata::infer_skill_name(&source);
                 let candidate = resolved.root.join(canonical::sanitize_component(&name)?);
-                let existing = store
-                    .get_all_skills()?
-                    .into_iter()
-                    .find(|record| {
-                        paths::same_path(
-                            std::path::Path::new(&record.central_path),
-                            &candidate,
-                        )
-                    });
-                if let Some(record) = existing {
-                    let Some(baseline) = record.content_hash.as_deref() else {
-                        return Err(anyhow::Error::from(AppError::invalid_input(
-                            "Managed skill has no recorded baseline; replacement was not applied",
-                        )));
-                    };
-                    let live = content_hash::hash_directory_strict(&candidate)
-                        .map_err(AppError::io)?;
-                    if live != baseline {
-                        return Err(anyhow::Error::from(AppError::invalid_input(
-                            "Managed skill was modified locally; replacement was not applied",
-                        )));
-                    }
-                }
+                ensure_replacement_baseline(&store, &candidate)
+                    .map_err(anyhow::Error::from)?;
             }
             let dest =
                 canonical::install_skill_dir(&source, &resolved, replace.unwrap_or(false))?;
@@ -677,7 +679,7 @@ mod tests {
     use super::*;
     use crate::core::error::ErrorKind;
     use crate::core::mcp_inventory::{McpHarnessStatus, McpTransport};
-    use crate::core::skill_store::ProjectRecord;
+    use crate::core::skill_store::{ProjectRecord, SkillRecord};
     use tempfile::tempdir;
 
     fn mcp_row(id: &str, name: &str) -> McpInventoryRow {
@@ -735,6 +737,42 @@ mod tests {
             vec![canonical.display().to_string()],
         )
         .unwrap_err();
+        assert!(matches!(error.kind, ErrorKind::InvalidInput));
+    }
+
+    #[test]
+    fn replacement_requires_a_baseline_for_an_identity_matched_record() {
+        let tmp = tempdir().unwrap();
+        let candidate = tmp.path().join("demo");
+        std::fs::create_dir_all(&candidate).unwrap();
+        std::fs::write(candidate.join("SKILL.md"), "---\nname: demo\n---\nbody").unwrap();
+        let store = SkillStore::new(&tmp.path().join("inventory.db")).unwrap();
+        let stored_path = candidate.parent().unwrap().join(".").join("demo");
+        store
+            .insert_skill(&SkillRecord {
+                id: "demo-id".to_string(),
+                name: "demo".to_string(),
+                description: None,
+                source_type: "local".to_string(),
+                source_ref: None,
+                source_ref_resolved: None,
+                source_subpath: None,
+                source_branch: None,
+                source_revision: None,
+                remote_revision: None,
+                central_path: stored_path.display().to_string(),
+                content_hash: None,
+                enabled: true,
+                created_at: 0,
+                updated_at: 0,
+                status: "ok".to_string(),
+                update_status: "local_only".to_string(),
+                last_checked_at: None,
+                last_check_error: None,
+            })
+            .unwrap();
+
+        let error = ensure_replacement_baseline(&store, &candidate).unwrap_err();
         assert!(matches!(error.kind, ErrorKind::InvalidInput));
     }
 
