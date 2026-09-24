@@ -147,9 +147,11 @@ fn classify_update_content(
 /// hash recorded in the index. The DB is an index; direct user edits must not
 /// be overwritten merely because the remote/source changed.
 fn ensure_live_skill_unchanged(skill: &SkillRecord) -> Result<(), AppError> {
-    let Some(recorded_hash) = skill.content_hash.as_deref() else {
-        return Ok(());
-    };
+    let recorded_hash = skill.content_hash.as_deref().ok_or_else(|| {
+        AppError::invalid_input(
+            "Managed skill has no indexed content baseline; reindex or reinstall before replacing it",
+        )
+    })?;
     let live_hash = content_hash::hash_directory_strict(Path::new(&skill.central_path))
         .map_err(AppError::io)?;
     if recorded_hash != live_hash {
@@ -2134,9 +2136,13 @@ pub fn update_git_skill_internal(
         let content_changed = match update_state {
             UpdateContentState::Unchanged => false,
             UpdateContentState::RemoteChanged => true,
-            // Legacy rows may not have a recorded hash. Preserve the previous
-            // behavior for them, while still refusing any detectable local edit.
-            UpdateContentState::Unknown => skill.content_hash.as_deref() != Some(new_hash.as_str()),
+            // A missing baseline cannot distinguish a user edit from an
+            // upstream change. Refuse the replacement rather than guessing.
+            UpdateContentState::Unknown => {
+                return Err(AppError::invalid_input(
+                    "Managed skill has no indexed content baseline; reindex or reinstall before updating",
+                ));
+            }
             UpdateContentState::LocalModified | UpdateContentState::Conflict => unreachable!(),
         };
 
@@ -3730,7 +3736,9 @@ mod tests {
         let central = write_skill_dir("gen");
         fs::write(central.join("mine.txt"), "user work").unwrap();
         let mut record = sample_skill("skill-1", "gen", &central);
+        record.source_type = "local".to_string();
         record.source_ref = Some(source.to_string_lossy().to_string());
+        record.content_hash = Some(content_hash::hash_directory(&central).unwrap());
         repo.store.insert_skill(&record).unwrap();
 
         // First attempt: held, with a token for the list the user is shown.
