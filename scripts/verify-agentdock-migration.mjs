@@ -10,6 +10,7 @@ const json = (file) => JSON.parse(read(file));
 const tauri = json('src-tauri/tauri.conf.json');
 const cargo = read('src-tauri/Cargo.toml');
 const workflow = read('.github/workflows/release.yml');
+const prepareWorkflow = read('.github/workflows/prepare-release.yml');
 const hook = read('src-tauri/windows/agentdock-migration.nsh');
 
 const checks = [
@@ -26,8 +27,17 @@ const checks = [
   ['legacy CLI target', /^name = "skills-manager-cli"/m.test(cargo)],
   ['release source guard', workflow.includes('RELEASE_SOURCE_REPOSITORY')],
   [
+    'prepare release guard ordering',
+    prepareWorkflow.includes('needs: validate-release-source') &&
+      prepareWorkflow.indexOf('validate-release-source') < prepareWorkflow.indexOf('Prepare release files'),
+  ],
+  [
+    'workflow source alignment',
+    workflow.includes('Zestful-ss/agentdock') && prepareWorkflow.includes('Zestful-ss/agentdock'),
+  ],
+  [
     'updater repository alignment',
-    tauri.plugins?.updater?.endpoints?.[0]?.includes('/xingkongliang/skills-manager/'),
+    tauri.plugins?.updater?.endpoints?.[0]?.includes('/Zestful-ss/agentdock/'),
   ],
   ['Linux ARM64 updater check', workflow.includes('linux-aarch64')],
 ];

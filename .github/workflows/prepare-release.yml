@@ -16,8 +16,28 @@ on:
 permissions:
   contents: write
 
+env:
+  # Keep this in sync with the updater endpoint and runtime release links.
+  RELEASE_SOURCE_REPOSITORY: Zestful-ss/agentdock
+
 jobs:
+  validate-release-source:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    name: Validate release source
+    steps:
+      - name: Match the configured updater repository
+        env:
+          EXPECTED_REPOSITORY: ${{ env.RELEASE_SOURCE_REPOSITORY }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.repository }}" != "$EXPECTED_REPOSITORY" ]; then
+            echo "::error::This workflow is pinned to $EXPECTED_REPOSITORY, but the workflow was dispatched in ${{ github.repository }}. Update the updater/runtime URLs and RELEASE_SOURCE_REPOSITORY together before preparing a release from another repository."
+            exit 1
+          fi
+
   prepare-release:
+    needs: validate-release-source
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch'
     steps:

@@ -16,39 +16,39 @@
   "help": {
     "eyebrow": "Guide",
     "title": "Quick Start for AgentDock",
-    "description": "Fastest path: install skills → open Global Workspace → click a Preset pill to activate. Press ⌘K anytime for the command palette. Use Project Workspaces, Git backup, and Settings as needed.",
+    "description": "AgentDock keeps Skills in canonical .agents folders, observes Harnesses read-only, and inventories MCP. Start with Install, organize in My Skills, then use Inventory and Project as needed.",
     "items": {
       "workflows": {
         "title": "Recommended Workflows",
-        "description": "Single-agent: install skills → open Global Workspace → click a Preset pill to activate, or hit + Add Skills to pick from your library and toggle target agents inline. Multi-project: open a Project Workspace and use the same Preset pills or + Add Skills picker for that project's agents. Multi-machine: turn on Git Backup in Settings to sync your library across devices."
+        "description": "Install Skills into the user or project .agents/skills root. Use My Skills to organize, Inventory to observe Harness skills and MCP, Project for repo-local skills, and Settings for Git backup and discovery configuration."
       },
       "presets": {
         "title": "Presets",
-        "description": "Group skills into named presets. In any workspace, click a Preset pill to instantly activate or deactivate all its skills for the current agent scope. Active presets show ✓; partially installed ones show a count. Applying a preset is a one-time copy — not a live sync."
+        "description": "Group Skills into named Presets for organization in My Skills. Preset membership is metadata only; it does not deploy, activate, or remove Harness files."
       },
       "install": {
         "title": "Install Skills",
-        "description": "Import from local folders, Git repositories, archives, or the marketplace. Batch-import multiple skills from a folder at once."
+        "description": "Install from local folders, Git repositories, archives, or the skills.sh CLI. All writes use the canonical .agents/skills roots."
       },
       "sync": {
-        "title": "Library",
-        "description": "Browse all installed skills with bulk tag editing and per-agent sync toggles. Filter by source or tag — including an Untagged pill to surface skills missing labels. Click an agent icon on any skill card to install or remove that skill for that agent in one click; the always-visible delete button removes a skill from the central library. Click the card itself to view docs, version history, and agent sync details."
+        "title": "My Skills",
+        "description": "Browse the shared library, edit tags, inspect sources and updates, and organize Preset membership. Harness-specific folders are not deployment targets."
       },
       "global": {
-        "title": "Global Workspace",
-        "description": "Each agent gets its own page listing every skill in its global folder — including ones installed outside AgentDock — so the view matches what the agent actually sees. Use + Add Skills to pull from your central library with inline target-agent chips, or use the All Agents overview to manage every installed agent at once. Skills that only exist in an agent folder can be deleted directly from the card."
+        "title": "Inventory",
+        "description": "Read-only view of Skills and MCP discovered in each Harness and native .agents consumer. Configure which discovery sources are visible in Settings."
       },
       "projects": {
         "title": "Project Workspaces",
-        "description": "Link a project to browse per-agent local skill folders, compare with the central library, and import or export changes. Use Preset pills to activate skill groups, or open + Add Skills to pick from your library with a multi-agent target picker."
+        "description": "Link a project to manage only <repo>/.agents/skills, compare it with the user library, and import or export project Skills. No per-agent deployment targets are selected."
       },
       "backup": {
-        "title": "Backup & Sync",
-        "description": "Sign in with GitHub once on the Backup page — backups then run automatically, and devices connected to the same repository stay in sync with each other. If the same skill is edited on two devices, it shows up under \"Needs attention\" with three choices (keep mine / use remote / keep both); a safety snapshot precedes every choice. Secrets and machine-specific settings are never backed up."
+        "title": "Git Backup",
+        "description": "Connect or restore a Git backup from Settings or the first-run recovery dialog. Devices connected to the same repository can sync the library; conflicts are surfaced for review."
       },
       "settings": {
         "title": "Settings",
-        "description": "Manage agent paths and toggles, add custom agents, drag to reorder how agents appear across the app, change sync mode, theme, text size, language, proxy, Git remote, AI search key, and check for app updates. Use Export Logs to bundle recent logs and install/remove/update/sync activity into a single zip when filing an issue."
+        "description": "Configure discovery paths and toggles, appearance, language, proxy, Git backup, app updates, and diagnostics. The legacy sync_mode setting remains internal; no Harness writes are performed."
       }
     }
   },
@@ -59,7 +59,7 @@
     "presets": "Presets",
     "projects": "Projects",
     "actions": "Actions",
-    "scanImport": "Scan & import local skills",
+    "scanImport": "Scan / Adopt local skills",
     "hints": {
       "navigate": "navigate",
       "open": "open",
@@ -70,11 +70,12 @@
     "greeting": "Hello!",
     "summary": "{{skills}} Skills in Library · {{agents}} Agents connected · {{projects}} Projects",
     "librarySkills": "Library Skills",
-    "syncCoverage": "Sync Coverage",
+    "updatesAvailable": "Updates Available",
     "connectedAgents": "Connected Agents",
-    "synced": "Synced",
-    "notSynced": "Not synced",
-    "scanImport": "Scan & Import Local Skills",
+    "source": "Source",
+    "updateAvailable": "Update available",
+    "upToDate": "Up to date",
+    "scanImport": "Scan / Adopt Local Skills",
     "installNew": "Install New Skills",
     "recentActivity": "Recent Activity"
   },
@@ -95,7 +96,7 @@
     "restore": "Connect & Restore",
     "restoring": "Restoring…",
     "restoreSuccess": "Backup restored — your skills are ready.",
-    "hint": "You can connect or restore a backup at any time from the Backup page in the sidebar."
+    "hint": "You can connect or restore a backup at any time from Settings or the first-run recovery dialog."
   },
   "mySkills": {
     "title": "Library",
@@ -108,7 +109,7 @@
     "moreActions": "More actions",
     "dragToReorder": "Drag to reorder",
     "delete": "Delete skill",
-    "deleteConfirm": "Delete skill \"{{name}}\" permanently? This removes its central library files, preset links, and synced agent targets.",
+    "deleteConfirm": "Delete skill \"{{name}}\" permanently? This removes its central library files and Preset links.",
     "deleted": "deleted",
     "noSkills": "No skills to display",
     "addFirst": "Click \"Install Skills\" to add skills into the central library",
@@ -118,7 +119,7 @@
     "targetClickInstall": "Click to install",
     "targetClickUninstall": "Click to uninstall",
     "needsAttention": "Needs attention",
-    "needsAttentionHint": "This skill has a sync conflict — open the Backup page to resolve it",
+    "needsAttentionHint": "This skill has a sync conflict — open Settings → Git Sync Configuration to resolve it",
     "updateNotification": "{{count}} skill(s) have updates available",
     "viewUpdates": "View",
     "sourceType": "Source type",
@@ -206,7 +207,7 @@
     "batchAlreadyUpToDate": "{{count}} skills already up to date",
     "batchUpdateFailed": "{{count}} skills failed to refresh",
     "deleteSelected": "Delete {{count}}",
-    "batchDeleteConfirm": "Delete {{count}} selected skills permanently? This removes their central library files, preset links, and synced agent targets.",
+    "batchDeleteConfirm": "Delete {{count}} selected skills permanently? This removes their central library files and Preset links.",
     "batchDeleted": "{{count}} skills deleted",
     "batchDeleteFailed": "{{count}} skills failed to delete",
     "batchToggleFailed": "{{count}} skills failed to update",
@@ -346,10 +347,6 @@
     "repoPathCustomHint": "Using a custom central repository path",
     "changeDir": "Change Directory",
     "openInFinder": "Open Folder",
-    "syncMode": "Default Sync Mode",
-    "syncModeDesc": "Symlinks are recommended — minimal disk usage with live updates. Applies to both global and project workspaces; note that symlinks in a project point to this machine's central library and won't travel with the repo.",
-    "symlink": "Symlink",
-    "copy": "File Copy",
     "theme": "Theme",
     "themeDesc": "Choose the app appearance.",
     "themeLight": "Light",
@@ -413,7 +410,7 @@
       "applyOn": "On"
     },
     "gitSyncConfig": "Git Sync Configuration",
-    "gitSyncConfigDesc": "Backup has moved to the dedicated Backup page. This legacy field is kept here for advanced Git URL edits.",
+    "gitSyncConfigDesc": "Configure the Git backup repository and sync behavior here. Harness discovery remains read-only.",
     "gitConfigSaved": "Git sync configuration saved",
     "gitDisconnect": "Disconnect",
     "gitDisconnected": "Backup disconnected. Local skills and remote data are kept.",
@@ -421,7 +418,7 @@
     "gitEngineGit2": "Built-in Git engine (experimental)",
     "gitEngineGit2Desc": "Use the app's built-in Git engine for HTTPS backup network operations — no system git needed, credentials injected from the keychain. SSH and custom remotes always use system git. Turn off to revert at any time.",
     "gitMergeEngineObject": "Skill-aware sync merge",
-    "gitMergeEngineObjectDesc": "Default. Merges synced changes per skill instead of per text line: renames combine with edits, and conflicting skills are kept locally and listed on the Backup page for review instead of blocking the sync. Turn off to fall back to the legacy line-based git merge.",
+    "gitMergeEngineObjectDesc": "Default. Merges synced changes per skill instead of per text line: renames combine with edits, and conflicting skills are kept locally and surfaced in Settings for review. Turn off to fall back to the legacy line-based git merge.",
     "gitRemoteUrl": "Remote URL",
     "gitRemoteUrlPlaceholder": "git@github.com:user/my-skills.git",
     "gitErrorAuth": "Authentication failed. Check SSH key or access token.",

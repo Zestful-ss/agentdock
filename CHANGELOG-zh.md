@@ -7,10 +7,7 @@
 
 ## [未发布]
 
-### 开发者与治理更新
-- **V1.1 加固** —— 工具开关和路径修改现在只影响发现配置；Preset 增删改查不再同步 Harness；移除关联项目工作区和项目 `skills-disabled` 入口。
-- **Canonical 完整性** —— Managed 删除和 skills.sh CLI 安装统一经过 canonical writer；创建项目只初始化 `<repo>/.agents/skills`；检测到 canonical 文件被本地修改时更新会暂停。
-- **可靠性** —— 项目 Inventory 改为单层只读；Git ref 查询增加超时；扫描/纳管在仓库锁内对账；前端 CI 现在执行 build、lint 和 i18n 检查。
+_暂无待发布变更。_
 
 ## [1.41.0] - 2026-09-23
 
@@ -25,6 +22,9 @@
 
 ### 开发者与治理更新
 - **AgentDock 重命名** —— 产品、包、桌面 bundle、主 CLI 和当前图标统一更名为 `AgentDock` / `agentdock-cli`。现有元数据路径、同步协议标识、签名身份、安装器升级标识以及 `skills-manager-cli` 可执行文件在过渡期间继续兼容。
+- **V1.1 加固** —— 工具开关和路径修改现在只影响发现配置；Preset 增删改查不再同步 Harness；移除关联项目工作区和项目 `skills-disabled` 入口。
+- **Canonical 完整性** —— Managed 删除和 skills.sh CLI 安装统一经过 canonical writer；创建项目只初始化 `<repo>/.agents/skills`；检测到 canonical 文件被本地修改时更新会暂停。
+- **可靠性** —— 项目 Inventory 改为单层只读；Git ref 查询增加超时；扫描/纳管在仓库锁内对账；前端 CI 现在执行 build、lint 和 i18n 检查。
 - **安装统一（P2.2）** —— App 和 CLI 的 Git/本地安装统一经过 `confirm_git_install_inner` / `canonical::install_skill_dir*`（`replace=false` 返回 `target_conflict`）。CLI Git 安装不会在内部路径之外持有 RepoLock；scenario 成员关系在释放锁后修复。
 - **移除死代码（P2.3）** —— 删除 `commands/browse.rs`、`commands/sync.rs`、`apply_preset_from_tray` / tray schedule、`installer::install_from_git_dir`，以及不再使用的 `git_backup`、`scanner`、`tool_adapters`、`sync_metadata`、`agent_workspace` 辅助代码；将 #363 共享目录回归测试移入 `scenario_service`。
 - **V1 不变量闭环（P2.6）** —— 启动流程只确保默认 Preset 状态；`update_global_local_skill_from_center` 不再注册；CLI 拒绝 `skills deploy/undeploy/sync` 和 `presets apply/deactivate/deploy/undeploy`；移除 `install --sync/--sync-preset`；删除受管技能不再触碰 `target_path`；update/reimport/set-source 不再调用 `resync_copy_targets`；`pending_removals_for` 不再检查 Harness 副本；`scan.rs` 导入路径复用 `canonical::register_user_skill`。

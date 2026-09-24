@@ -3,7 +3,7 @@ import { getErrorKind, getErrorMessage } from "./error";
 
 /**
  * Map a git backup error to the plain-language copy under `settings.gitError*`.
- * Shared by the Backup page and the first-run restore dialog.
+ * Shared by the Settings Git Sync Configuration and the first-run restore dialog.
  */
 export function mapGitErrorMessage(error: unknown, t: TFunction): string {
   const kind = getErrorKind(error);

@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <small>Compatibility: existing metadata stays under <code>~/.skills-manager</code>; the historical <code>skills-manager-cli</code> executable remains available as an alias during the transition. The GitHub repository, website, and package/cask URLs remain on their existing identifiers until those external services are renamed; the release workflow refuses tags from a different repository.</small>
+  <small>Compatibility: existing metadata stays under <code>~/.skills-manager</code>; the historical <code>skills-manager-cli</code> executable remains available as an alias during the transition. The GitHub release source is now <code>Zestful-ss/agentdock</code>; the website and Homebrew cask must be updated as part of the external release gate.</small>
 </p>
 
 <p align="center">
@@ -35,7 +35,7 @@
 </p>
 
 <p align="center">
-  <a href="https://skills.sh/xingkongliang/skills-manager"><img src="https://skills.sh/b/xingkongliang/skills-manager" alt="manage-skills on skills.sh" /></a>
+  <a href="https://skills.sh/Zestful-ss/agentdock"><img src="https://skills.sh/b/Zestful-ss/agentdock" alt="manage-skills on skills.sh" /></a>
 </p>
 
 > The current V1.1 screenshots are being recaptured; the behavior documented below is authoritative.
@@ -68,11 +68,11 @@ Install with [Homebrew](https://brew.sh):
 brew install --cask skills-manager
 ```
 
-You can also download the `.dmg` for your Mac from the [latest release](https://github.com/xingkongliang/skills-manager/releases/latest).
+You can also download the `.dmg` for your Mac from the [latest release](https://github.com/Zestful-ss/agentdock/releases/latest).
 
 ### Windows and Linux
 
-Download the installer for your platform from the [latest release](https://github.com/xingkongliang/skills-manager/releases/latest): `.exe` or `.msi` for Windows, and `.AppImage`, `.deb`, or `.rpm` for Linux (x64 and arm64).
+Download the installer for your platform from the [latest release](https://github.com/Zestful-ss/agentdock/releases/latest): `.exe` or `.msi` for Windows, and `.AppImage`, `.deb`, or `.rpm` for Linux (x64 and arm64).
 
 Every installer ships the CLI inside the app — see [Where the binary lives](#where-the-binary-lives).
 
@@ -92,7 +92,7 @@ Claude Code, Codex, Cursor and the rest can drive AgentDock through the [`manage
 It is also an ordinary published skill, so it can be installed without the app:
 
 ```bash
-npx skills add xingkongliang/skills-manager
+npx skills add Zestful-ss/agentdock
 ```
 
 ## Multi-device library sync (commands)
@@ -209,13 +209,13 @@ npm run cli:build
 
 **macOS refuses to open the app.** Releases from **v1.29.0** onward are signed with an Apple Developer ID certificate and notarized, so they open normally. If you see "Apple could not verify…" or "App is damaged", you are on v1.28.5 or older — upgrading is the fix. (Upgrading changes the code signature, so macOS may ask once more for the `skills-manager-git-backup` keychain entry; click **Always Allow**.)
 
-Anything else — [open an issue](https://github.com/xingkongliang/skills-manager/issues), and attach the bundle from **Settings → Export Logs**.
+Anything else — [open an issue](https://github.com/Zestful-ss/agentdock/issues), and attach the bundle from **Settings → Export Logs**.
 
 ## Star History
 
 <p align="center">
   <a href="https://github.com/xingkongliang/star-history-svg">
-    <img src="assets/star-history.svg" width="800" alt="Star History chart for xingkongliang/skills-manager" />
+    <img src="assets/star-history.svg" width="800" alt="Star History chart for Zestful-ss/agentdock" />
   </a>
 </p>
 

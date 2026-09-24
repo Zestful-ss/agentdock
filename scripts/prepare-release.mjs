@@ -8,6 +8,7 @@ const args = process.argv.slice(2);
 
 const releaseArg = args.find((arg) => !arg.startsWith('--'));
 const dryRun = args.includes('--dry-run');
+const dateStr = new Date().toISOString().slice(0, 10);
 
 if (!releaseArg) {
   console.error('Usage: npm run release:prepare -- <patch|minor|major|x.y.z> [--dry-run]');
@@ -98,6 +99,35 @@ function updateCargoLockVersion(cargoLock, nextVersion) {
   );
 }
 
+function sectionAfterHeading(text, headingPattern) {
+  const match = headingPattern.exec(text);
+  if (!match) return '';
+
+  const afterHeading = text.slice(match.index + match[0].length);
+  const nextHeading = afterHeading.search(/^## \[/m);
+  return nextHeading === -1 ? afterHeading : afterHeading.slice(0, nextHeading);
+}
+
+function hasSubstantiveContent(section) {
+  return section
+    .split('\n')
+    .map((line) => line.trim())
+    .some((line) => {
+      if (!line || line.startsWith('#')) return false;
+      const isPlaceholder = line.startsWith('_') && line.endsWith('_');
+      return !isPlaceholder;
+    });
+}
+
+function updateChangelogDate(changelog, version, date) {
+  const escapedVersion = version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const headingPattern = new RegExp(`^(## \\[${escapedVersion}\\](?: - )?)(?:\\d{4}-\\d{2}-\\d{2})?$`, 'm');
+  if (!headingPattern.test(changelog)) {
+    throw new Error(`Missing ${version} heading while updating release date`);
+  }
+  return changelog.replace(headingPattern, `$1${date}`);
+}
+
 function requireChangelogEntry(changelog, version, { zh = false, label = 'CHANGELOG.md' } = {}) {
   const escapedVersion = version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const headingPattern = new RegExp(`^## \\[${escapedVersion}\\](?: - .*)?$`, 'm');
@@ -125,10 +155,12 @@ function requireChangelogEntry(changelog, version, { zh = false, label = 'CHANGE
     throw new Error(`${label} section ${version} contains only placeholders; add release notes before preparing the release`);
   }
 
-  const nextVersionHeading = changelog.search(/^## \[(?!(?:Unreleased|未发布)\])/m);
-  const unreleased = nextVersionHeading === -1 ? changelog : changelog.slice(0, nextVersionHeading);
-  if (/AgentDock/i.test(unreleased) && !/AgentDock/i.test(section)) {
-    throw new Error(`${label} section ${version} does not carry the pending AgentDock rename note`);
+  const unreleasedHeading = zh
+    ? /^## \[未发布\][^\S\r\n]*$/m
+    : /^## \[Unreleased\][^\S\r\n]*$/m;
+  const unreleased = sectionAfterHeading(changelog, unreleasedHeading);
+  if (hasSubstantiveContent(unreleased)) {
+    throw new Error(`${label} still has substantive Unreleased content; fold it into ${version} before preparing a release`);
   }
 
   return changelog;
@@ -171,11 +203,19 @@ function main() {
   updateSettingsVersion(en, nextVersion, 'src/i18n/en.json');
   updateSettingsVersion(zh, nextVersion, 'src/i18n/zh.json');
   updateSettingsVersion(zhTw, nextVersion, 'src/i18n/zh-TW.json');
-  const nextChangelog = requireChangelogEntry(changelog, nextVersion, { label: 'CHANGELOG.md' });
-  const nextChangelogZh = requireChangelogEntry(changelogZh, nextVersion, {
-    zh: true,
-    label: 'CHANGELOG-zh.md',
-  });
+  const nextChangelog = updateChangelogDate(
+    requireChangelogEntry(changelog, nextVersion, { label: 'CHANGELOG.md' }),
+    nextVersion,
+    dateStr,
+  );
+  const nextChangelogZh = updateChangelogDate(
+    requireChangelogEntry(changelogZh, nextVersion, {
+      zh: true,
+      label: 'CHANGELOG-zh.md',
+    }),
+    nextVersion,
+    dateStr,
+  );
 
   if (dryRun) {
     console.log(`[dry-run] ${currentVersion} -> ${nextVersion}`);

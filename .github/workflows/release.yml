@@ -13,7 +13,7 @@ env:
   # Keep this in sync with the updater endpoint and runtime release links.
   # Publishing a tag from a fork without updating those URLs would create
   # assets that installed clients cannot discover.
-  RELEASE_SOURCE_REPOSITORY: xingkongliang/skills-manager
+  RELEASE_SOURCE_REPOSITORY: Zestful-ss/agentdock
 
 jobs:
   validate-release-source:

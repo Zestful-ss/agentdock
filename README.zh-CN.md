@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <small>兼容说明：现有元数据仍位于 <code>~/.skills-manager</code>；过渡期间保留旧的 <code>skills-manager-cli</code> 可执行文件作为别名。GitHub 仓库、官网以及 package/cask URL 在外部服务完成重命名前继续使用现有标识；Release workflow 会拒绝来自其它仓库的 tag。</small>
+  <small>兼容说明：现有元数据仍位于 <code>~/.skills-manager</code>；过渡期间保留旧的 <code>skills-manager-cli</code> 可执行文件作为别名。GitHub Release 源现在为 <code>Zestful-ss/agentdock</code>；官网和 Homebrew cask 需要在外部发布 Gate 中同步更新。</small>
 </p>
 
 <p align="center">
@@ -31,7 +31,7 @@
 </p>
 
 <p align="center">
-  <a href="https://skills.sh/xingkongliang/skills-manager"><img src="https://skills.sh/b/xingkongliang/skills-manager" alt="skills.sh 上的 manage-skills" /></a>
+  <a href="https://skills.sh/Zestful-ss/agentdock"><img src="https://skills.sh/b/Zestful-ss/agentdock" alt="skills.sh 上的 manage-skills" /></a>
 </p>
 
 ## 功能
@@ -60,11 +60,11 @@
 brew install --cask skills-manager
 ```
 
-也可以从[最新 Release](https://github.com/xingkongliang/skills-manager/releases/latest)下载 `.dmg`。
+也可以从[最新 Release](https://github.com/Zestful-ss/agentdock/releases/latest)下载 `.dmg`。
 
 ### Windows 和 Linux
 
-从[最新 Release](https://github.com/xingkongliang/skills-manager/releases/latest)下载对应平台的安装包：Windows 为 `.exe` 或 `.msi`，Linux 为 `.AppImage`、`.deb` 或 `.rpm`（提供 x64 和 arm64）。
+从[最新 Release](https://github.com/Zestful-ss/agentdock/releases/latest)下载对应平台的安装包：Windows 为 `.exe` 或 `.msi`，Linux 为 `.AppImage`、`.deb` 或 `.rpm`（提供 x64 和 arm64）。
 
 所有安装包都自带 CLI，位置见[二进制放在哪](#二进制放在哪)。
 
@@ -85,7 +85,7 @@ Claude Code、Codex、Cursor 等可以通过 [`manage-skills`](skills/manage-ski
 CLI 也可以独立安装：
 
 ```bash
-npx skills add xingkongliang/skills-manager
+npx skills add Zestful-ss/agentdock
 ```
 
 ## Git 备份与多设备同步
@@ -180,13 +180,13 @@ npm run cli:build
 
 **macOS 打不开应用。** 从 **v1.29.0** 起，发布版本都经过 Apple Developer ID 签名与公证。若仍看到「应用已损坏」，请升级到最新版本。升级后 macOS 可能再次询问 `skills-manager-git-backup` 钥匙串权限，请选择「始终允许」。
 
-其它问题请[提交 issue](https://github.com/xingkongliang/skills-manager/issues)，并附上 **设置 → 导出日志** 生成的压缩包。
+其它问题请[提交 issue](https://github.com/Zestful-ss/agentdock/issues)，并附上 **设置 → 导出日志** 生成的压缩包。
 
 ## Star 增长
 
 <p align="center">
   <a href="https://github.com/xingkongliang/star-history-svg">
-    <img src="assets/star-history.svg" width="800" alt="xingkongliang/skills-manager 的 Star History 图" />
+    <img src="assets/star-history.svg" width="800" alt="Zestful-ss/agentdock 的 Star History 图" />
   </a>
 </p>
 

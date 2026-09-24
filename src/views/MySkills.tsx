@@ -180,7 +180,7 @@ export function MySkills() {
   }, [viewedPreset, skills]);
 
   // Skills with an unresolved sync conflict get a "needs attention" badge
-  // that jumps to the Backup page (merge-engine design §4 UI).
+  // that jumps to Settings → Git Sync Configuration (merge-engine design §4 UI).
   const [conflictIds, setConflictIds] = useState<Set<string>>(new Set());
   useEffect(() => {
     api.gitBackupPendingConflicts()

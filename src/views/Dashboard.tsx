@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { Layers, CheckCircle2, Bot, Plus, Download, AlertTriangle } from "lucide-react";
+import { Layers, CheckCircle2, Bot, Plus, Download, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useApp } from "../context/AppContext";
 
@@ -15,14 +15,9 @@ export function Dashboard() {
   );
 
   const totalSkills = managedSkills.length;
-  const syncedSkills = useMemo(
-    () => managedSkills.filter((s) => s.targets.length > 0).length,
+  const updateAvailable = useMemo(
+    () => managedSkills.filter((s) => s.update_status === "update_available").length,
     [managedSkills]
-  );
-
-  const divergedCount = useMemo(
-    () => projects.reduce((acc, p) => acc + p.sync_health.diverged, 0),
-    [projects]
   );
 
   const recentSkills = useMemo(
@@ -30,10 +25,9 @@ export function Dashboard() {
     [managedSkills]
   );
 
-  const coverageLabel = totalSkills === 0 ? "0" : `${syncedSkills}/${totalSkills}`;
-  const syncCardIcon = divergedCount > 0 ? AlertTriangle : CheckCircle2;
-  const syncCardColor = divergedCount > 0 ? "text-amber-400" : "text-emerald-400";
-  const syncCardBg = divergedCount > 0 ? "bg-amber-500/[0.08]" : "bg-emerald-500/[0.08]";
+  const updateCardIcon = updateAvailable > 0 ? RefreshCw : CheckCircle2;
+  const updateCardColor = updateAvailable > 0 ? "text-amber-400" : "text-emerald-400";
+  const updateCardBg = updateAvailable > 0 ? "bg-amber-500/[0.08]" : "bg-emerald-500/[0.08]";
 
   return (
     <div className="app-page app-page-narrow">
@@ -59,11 +53,11 @@ export function Dashboard() {
             bg: "bg-accent-bg",
           },
           {
-            title: t("dashboard.syncCoverage"),
-            value: coverageLabel,
-            icon: syncCardIcon,
-            color: syncCardColor,
-            bg: syncCardBg,
+            title: t("dashboard.updatesAvailable"),
+            value: String(updateAvailable),
+            icon: updateCardIcon,
+            color: updateCardColor,
+            bg: updateCardBg,
           },
           {
             title: t("dashboard.connectedAgents"),
@@ -147,9 +141,9 @@ export function Dashboard() {
                       </span>
                     </h4>
                     <p className="text-[13px] text-muted mt-px">
-                      {skill.targets.length > 0
-                        ? `${t("dashboard.synced")} → ${skill.targets.map((target) => target.tool).join(", ")}`
-                        : t("dashboard.notSynced")}
+                      {t("dashboard.source")}: {skill.source_type} · {skill.update_status === "update_available"
+                        ? t("dashboard.updateAvailable")
+                        : t("dashboard.upToDate")}
                     </p>
                   </div>
                 </div>

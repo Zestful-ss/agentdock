@@ -16,39 +16,39 @@
   "help": {
     "eyebrow": "操作指南",
     "title": "快速上手 AgentDock",
-    "description": "最快路径：安装 Skills → 打开全局工作区 → 点击 Preset 标签激活。按 ⌘K 可随时呼出命令面板。按需使用项目工作区、Git 备份和设置。",
+    "description": "AgentDock 将 Skills 保存在 canonical .agents 目录中，只读观察 Harness，并盘点 MCP。先从 Install 开始，在 My Skills 中整理，再按需使用 Inventory 和 Project。",
     "items": {
       "workflows": {
         "title": "推荐工作流",
-        "description": "单 Agent 用户：安装 Skills → 打开全局工作区 → 点击 Preset 标签激活，或点 + 添加 Skills 从技能库挑选并即时切换目标 Agent。多项目用户：打开项目工作区，同样可用 Preset 标签或 + 添加 Skills 弹层为该项目的 Agent 配置 Skills。多机用户：在设置页开启 Git 备份，把中央仓库在多台设备间同步。"
+        "description": "将 Skills 安装到用户或项目的 .agents/skills 根目录。用 My Skills 整理，用 Inventory 观察 Harness Skills 和 MCP，用 Project 管理仓库级 Skills，并在 Settings 中配置 Git 备份和发现来源。"
       },
       "presets": {
         "title": "Preset",
-        "description": "把 Skills 组织成命名的 Preset。在任意工作区点击 Preset 标签，即可一键激活或停用其全部 Skills。激活的 Preset 显示 ✓，部分安装的显示数量。应用 Preset 是一次性操作，不会自动同步。"
+        "description": "在 My Skills 中把 Skills 组织成命名的 Preset。Preset 成员关系只是元数据，不会部署、激活或删除 Harness 文件。"
       },
       "install": {
         "title": "安装 Skills",
-        "description": "从本地目录、Git 仓库、压缩包或市场导入。支持批量导入文件夹中的多个 Skill。"
+        "description": "从本地目录、Git 仓库、压缩包或 skills.sh CLI 安装。所有写入都使用 canonical .agents/skills 根目录。"
       },
       "sync": {
-        "title": "技能库",
-        "description": "浏览所有已安装 Skills，支持批量标签编辑和按 Agent 同步开关。可按来源或标签过滤，新增的「未标签」过滤项可快速定位漏打标签的 Skills。点击卡片上的 Agent 图标可一键为该 Agent 安装或移除该 Skill；卡片上始终显示的删除按钮可从中央库整体删除该 Skill。点击卡片本身查看文档、版本历史和 Agent 同步详情。"
+        "title": "My Skills",
+        "description": "浏览共享技能库、编辑标签、查看来源和更新状态，并整理 Preset 成员关系。Harness 专属目录不是部署目标。"
       },
       "global": {
-        "title": "全局工作区",
-        "description": "每个 Agent 都有自己的页面，列出其全局目录里的所有 Skills（包括不是通过 AgentDock 安装的），与 Agent 实际看到的内容保持一致。点击 + 添加 Skills 从中央库挑选，并通过内嵌的 Agent 标签选择目标；也可通过「全部 Agents」总览跨所有已安装 Agent 统一管理。仅存在于某个 Agent 目录的 Skills 可直接在卡片上删除。"
+        "title": "Inventory",
+        "description": "只读查看每个 Harness 和原生 .agents 使用者发现的 Skills 与 MCP。可在 Settings 中配置可见的发现来源。"
       },
       "projects": {
         "title": "项目工作区",
-        "description": "关联项目后查看各 Agent 的本地 Skills 目录，对照中央仓库双向导入导出。使用 Preset 标签激活技能组，或点 + 添加 Skills 通过多 Agent 目标选择器从技能库挑选。"
+        "description": "关联项目后只管理 <repo>/.agents/skills，与用户技能库比较，并导入或导出项目 Skills。不会选择 per-agent 部署目标。"
       },
       "backup": {
-        "title": "备份与同步",
-        "description": "在备份页用 GitHub 登录一次，之后备份自动进行；连接同一仓库的多台设备会自动保持一致。同一技能在两台设备被同时修改时会进入「需要处理」，三选一（保留本机 / 使用远端 / 两个都保留），每次选择前都会先建安全快照。密钥和本机专属设置永不备份。"
+        "title": "Git 备份",
+        "description": "从 Settings 或首次运行恢复对话框连接、恢复 Git 备份。连接同一仓库的设备可以同步技能库，冲突会显示出来供用户处理。"
       },
       "settings": {
         "title": "设置",
-        "description": "管理 Agent 路径与开关、自定义 Agent、拖拽调整 Agent 在全应用中的显示顺序、同步模式、主题字号、语言、网络代理、Git 远程、AI 搜索 Key，以及应用更新。可用「导出日志」把最近日志与安装/移除/更新/同步活动打包成压缩文件，方便提交 Issue。"
+        "description": "配置发现路径与开关、外观、语言、代理、Git 备份、应用更新和诊断信息。旧的 sync_mode 设置仅保留在内部，AgentDock 不会写入 Harness。"
       }
     }
   },
@@ -59,7 +59,7 @@
     "presets": "Preset",
     "projects": "项目",
     "actions": "操作",
-    "scanImport": "扫描并导入本地技能",
+    "scanImport": "扫描 / 纳管本地技能",
     "hints": {
       "navigate": "选择",
       "open": "打开",
@@ -70,11 +70,12 @@
     "greeting": "你好！",
     "summary": "Library 中 {{skills}} 个 Skills · 已接入 {{agents}} 个 Agent · {{projects}} 个 Project",
     "librarySkills": "Library Skills",
-    "syncCoverage": "同步覆盖",
+    "updatesAvailable": "可用更新",
     "connectedAgents": "已接入 Agent",
-    "synced": "已同步",
-    "notSynced": "未同步",
-    "scanImport": "扫描本地 Skills 导入",
+    "source": "来源",
+    "updateAvailable": "有可用更新",
+    "upToDate": "已是最新",
+    "scanImport": "扫描 / 纳管本地 Skills",
     "installNew": "安装新 Skills",
     "recentActivity": "近期动态"
   },
@@ -95,7 +96,7 @@
     "restore": "连接并恢复",
     "restoring": "正在恢复…",
     "restoreSuccess": "备份已恢复，技能已就绪。",
-    "hint": "之后随时可以在侧边栏的「备份」页连接或恢复备份。"
+    "hint": "之后随时可以从「设置」或首次运行恢复对话框连接或恢复备份。"
   },
   "mySkills": {
     "title": "技能库",
@@ -108,7 +109,7 @@
     "moreActions": "更多操作",
     "dragToReorder": "拖动排序",
     "delete": "删除 Skill",
-    "deleteConfirm": "确定彻底删除 Skill \"{{name}}\" 吗？中央仓库文件、Preset 关联和已同步到各 Agent 的目标都会被移除。",
+    "deleteConfirm": "确定彻底删除 Skill \"{{name}}\" 吗？中央库文件和 Preset 关联都会被移除。",
     "deleted": "已删除",
     "noSkills": "没有可显示的 Skills",
     "addFirst": "点击“安装 Skills”开始添加到中央仓库",
@@ -118,7 +119,7 @@
     "targetClickInstall": "点击安装",
     "targetClickUninstall": "点击卸载",
     "needsAttention": "需要处理",
-    "needsAttentionHint": "此技能存在同步冲突——点击前往备份页处理",
+    "needsAttentionHint": "此技能存在同步冲突——打开「设置 → Git Sync Configuration」处理",
     "updateNotification": "{{count}} 个 Skill 有可用更新",
     "viewUpdates": "查看",
     "sourceType": "来源类型",
@@ -206,7 +207,7 @@
     "batchAlreadyUpToDate": "{{count}} 个 Skill 已是最新",
     "batchUpdateFailed": "{{count}} 个 Skill 更新失败",
     "deleteSelected": "删除 {{count}} 个",
-    "batchDeleteConfirm": "确定彻底删除选中的 {{count}} 个 Skill 吗？中央仓库文件、Preset 关联和已同步到各 Agent 的目标都会被移除。",
+    "batchDeleteConfirm": "确定彻底删除选中的 {{count}} 个 Skill 吗？中央库文件和 Preset 关联都会被移除。",
     "batchDeleted": "已删除 {{count}} 个 Skill",
     "batchDeleteFailed": "{{count}} 个 Skill 删除失败",
     "batchToggleFailed": "{{count}} 个 Skill 更新失败",
@@ -346,10 +347,6 @@
     "repoPathCustomHint": "当前使用自定义中央仓库路径",
     "changeDir": "更改目录",
     "openInFinder": "打开文件夹",
-    "syncMode": "默认同步模式",
-    "syncModeDesc": "推荐使用符号链接，占用空间极小且修改可实时生效。全局与项目工作区均生效；注意项目里的符号链接指向本机中央库，不会随仓库带走。",
-    "symlink": "符号链接",
-    "copy": "文件复制",
     "theme": "主题",
     "themeDesc": "选择应用的外观主题。",
     "themeLight": "浅色",
@@ -413,7 +410,7 @@
       "applyOn": "开启"
     },
     "gitSyncConfig": "Git 同步配置",
-    "gitSyncConfigDesc": "备份已移到独立的「备份」页面。这里保留为高级 Git URL 编辑入口。",
+    "gitSyncConfigDesc": "在这里配置 Git 备份仓库和同步行为。Harness 发现仍然是只读的。",
     "gitConfigSaved": "Git 同步配置已保存",
     "gitDisconnect": "断开备份",
     "gitDisconnected": "已断开备份，本地技能与远端数据均保留。",
@@ -421,7 +418,7 @@
     "gitEngineGit2": "内置 Git 引擎（实验性）",
     "gitEngineGit2Desc": "HTTPS 备份的网络操作改用应用内置的 Git 引擎——不依赖系统 git，凭证从钥匙串内存注入。SSH 与自定义远端始终走系统 git。可随时关闭还原。",
     "gitMergeEngineObject": "按技能合并同步",
-    "gitMergeEngineObjectDesc": "默认开启。同步时按技能对象而非文本行合并：重命名与内容修改自动组合；真正冲突的技能会保留本机版本并在备份页列出待处理，而不是阻塞同步。关闭则回退到旧的按行 git 合并。",
+    "gitMergeEngineObjectDesc": "默认开启。同步时按技能对象而非文本行合并：重命名与内容修改自动组合；真正冲突的技能会保留本机版本并在设置中提示处理，而不是阻塞同步。关闭则回退到旧的按行 git 合并。",
     "gitRemoteUrl": "远程仓库地址",
     "gitRemoteUrlPlaceholder": "git@github.com:user/my-skills.git",
     "gitErrorAuth": "认证失败，请检查 SSH Key 或访问令牌。",
