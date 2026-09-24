@@ -52,7 +52,7 @@
 - **Skill tagging and filters** — Tag skills, group by source or tag, and find untagged ones quickly.
 - **Manual update tracking** — Check for upstream updates on Git-based skills; re-import local ones. Updates are never applied automatically.
 - **Skill preview and source inspection** — Read `SKILL.md` / `README.md`, inspect source metadata, and compare local content with the upstream version inside the app.
-- **Custom read-only paths** — Add extra Skill roots to Inventory. AgentDock observes them but never writes to them; use Adopt to copy a snapshot into a canonical library.
+- **Custom read-only paths** — Add extra Skill roots to Inventory. AgentDock observes them but never writes to them; use Adopt to copy a snapshot into a canonical library. Inventory rows can be ignored, hidden, or annotated without changing the source.
 - **Activity log & Export Logs** — Install / remove / update operations are recorded locally. Use **Settings → Export Logs** to bundle recent logs and activity history into a single zip for easier issue reports.
 - **Flexible app settings** — Configure discovery paths, theme, text size, language, proxy, diagnostics, and harness order — all in one place.
 

@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_No pending changes._
+### AgentDock local-only surface
+- Unified Skills/MCP inventory now retains source, ownership, duplicate rows, custom read-only paths, and per-resource ignore/hide/note state.
+- Adopt conflicts open a `SKILL.md` diff before replacement; locally modified managed skills are not overwritten.
+- Git backup, multi-device merge, app updater, tray/background lifecycle, startup CLI bridge, filesystem watcher, generic library export, Traditional Chinese, and Dashboard surfaces are removed.
+- The standalone `agentdock-cli` and `inventory` commands remain available for local automation.
 
 ## [1.41.0] - 2026-09-23
 

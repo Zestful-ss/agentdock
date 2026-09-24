@@ -43,8 +43,8 @@
 - **Project Workspaces** —— 管理 `<repo>/.agents/skills` 中的项目 Skills，并与用户技能库比较。
 - **安装与来源** —— 支持本地目录、Git、压缩包和 skills.sh CLI 安装；保留来源、revision、标签和更新状态。
 - **手动更新** —— 对 Git Skills 手动检查远端更新；本地修改会触发保护，不会静默覆盖。
-- **发现配置** —— Agent 开关、路径编辑和自定义只读路径只改变 Inventory 的发现配置，不执行 Harness 写入。
-- **显式 Adopt** —— 从 Harness 或外部资源复制快照到用户库或项目库，每次都选择目标；已存在时先取消或确认差异，再 Replace。
+- **发现配置** —— Agent 开关、路径编辑和自定义只读路径只改变 Inventory 的发现配置，不执行 Harness 写入。Inventory 资源可单独隐藏、忽略或添加本地备注，不会修改来源。
+- **显式 Adopt** —— 从 Harness 或外部资源复制快照到用户库或项目库，每次都选择目标；已存在时先查看 `SKILL.md` 差异，再确认 Replace。
 - **活动日志与导出** —— 记录安装、删除、更新和纳管操作；在 **设置 → 导出日志** 打包诊断信息。
 
 > 文档中的截图待按当前 V1.1 界面重新录制；行为说明以本文和 `architecture/ARCHITECTURE.md` 为准。

@@ -127,6 +127,7 @@ Remove deletes the canonical library directory and its metadata row. Legacy Harn
 "$SM" --json inventory paths list
 "$SM" --json inventory paths add C:\\Tools\\shared-skills
 "$SM" --json inventory paths remove C:\\Tools\\shared-skills --dry-run
+"$SM" --json inventory state --kind skill C:\\Users\\me\\.claude\\skills\\my-skill --ignored true
 ```
 
 Inventory rows retain source and ownership. Duplicate names from different

@@ -7,7 +7,11 @@
 
 ## [未发布]
 
-_暂无待发布变更。_
+### AgentDock 本机化资源面
+- 统一 Skills/MCP Inventory 保留来源、ownership、重复项、自定义只读路径，以及每个资源的隐藏、忽略和备注状态。
+- Adopt 冲突先展示 `SKILL.md` 差异再确认 Replace；本地修改过的受管 Skill 不会被覆盖。
+- 移除 Git 备份、多设备合并、应用内更新、托盘后台、启动 CLI bridge、文件 watcher、通用技能库导出、繁体中文和 Dashboard。
+- 保留独立的 `agentdock-cli` 与 `inventory` 命令供本机自动化使用。
 
 ## [1.41.0] - 2026-09-23
 
