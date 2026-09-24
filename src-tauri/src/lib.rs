@@ -124,6 +124,8 @@ pub fn run() {
             commands::inventory::set_custom_read_only_paths,
             commands::inventory::get_project_skill_inventory,
             commands::inventory::get_mcp_inventory,
+            commands::inventory::set_inventory_resource_state,
+            commands::inventory::get_adopt_diff,
             commands::inventory::adopt_skill_to_user,
             commands::inventory::adopt_skill_to_project,
             commands::inventory::delete_canonical_skill,

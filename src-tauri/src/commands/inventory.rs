@@ -1,6 +1,8 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use serde_json::from_str as json_from_str;
 use tauri::State;
 
@@ -14,6 +16,74 @@ use crate::core::skill_store::SkillStore;
 use crate::core::sync_metadata;
 
 const CUSTOM_READ_ONLY_PATHS_KEY: &str = "custom_read_only_skill_paths";
+const RESOURCE_STATES_KEY: &str = "inventory_resource_states";
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ResourceState {
+    #[serde(default)]
+    pub ignored: bool,
+    #[serde(default)]
+    pub hidden: bool,
+    #[serde(default)]
+    pub note: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdoptDiff {
+    pub original: String,
+    pub updated: String,
+    pub source_path: String,
+    pub target_path: String,
+}
+
+fn resource_key(kind: &str, path: &str) -> String {
+    format!("{}:{}", kind, paths::identity_key(std::path::Path::new(path)))
+}
+
+fn load_resource_states(store: &SkillStore) -> Result<BTreeMap<String, ResourceState>, AppError> {
+    let Some(raw) = store
+        .get_setting(RESOURCE_STATES_KEY)
+        .map_err(AppError::db)?
+    else {
+        return Ok(BTreeMap::new());
+    };
+    serde_json::from_str(&raw).map_err(AppError::internal)
+}
+
+fn save_resource_states(
+    store: &SkillStore,
+    states: &BTreeMap<String, ResourceState>,
+) -> Result<(), AppError> {
+    let encoded = serde_json::to_string(states).map_err(AppError::internal)?;
+    store
+        .set_setting(RESOURCE_STATES_KEY, &encoded)
+        .map_err(AppError::db)
+}
+
+fn decorate_skill_rows(
+    rows: &mut [SkillInventoryRow],
+    states: &BTreeMap<String, ResourceState>,
+) {
+    for row in rows {
+        if let Some(state) = states.get(&resource_key("skill", &row.path)) {
+            row.ignored = state.ignored;
+            row.hidden = state.hidden;
+            row.note = state.note.clone();
+        }
+    }
+}
+
+fn decorate_mcp_rows(rows: &mut [McpInventoryRow], states: &BTreeMap<String, ResourceState>) {
+    for row in rows {
+        if let Some(source) = row.sources.first() {
+            if let Some(state) = states.get(&resource_key("mcp", &source.source_path)) {
+                row.ignored = state.ignored;
+                row.hidden = state.hidden;
+                row.note = state.note.clone();
+            }
+        }
+    }
+}
 
 pub fn custom_read_only_paths(store: &SkillStore) -> Result<Vec<PathBuf>, AppError> {
     let raw = store
@@ -70,7 +140,10 @@ pub async fn get_skill_inventory(
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let custom_paths = custom_read_only_paths(&store)?;
-        Ok(mcp_inventory::discover_skills_with_custom_paths(&custom_paths))
+        let states = load_resource_states(&store)?;
+        let mut rows = mcp_inventory::discover_skills_with_custom_paths(&custom_paths);
+        decorate_skill_rows(&mut rows, &states);
+        Ok(rows)
     })
     .await
     .map_err(|e| AppError::internal(e.to_string()))?
@@ -113,10 +186,13 @@ pub async fn get_project_skill_inventory(
     tauri::async_runtime::spawn_blocking(move || {
         // Read-only: viewing a project must never create its `.agents/skills`.
         let (project_path, root) = canonical::resolve_project_root_for_read(&store, &project_id)?;
-        Ok(mcp_inventory::discover_project_skills_at(
+        let states = load_resource_states(&store)?;
+        let mut rows = mcp_inventory::discover_project_skills_at(
             &root,
             std::path::Path::new(&project_path),
-        ))
+        );
+        decorate_skill_rows(&mut rows, &states);
+        Ok(rows)
     })
     .await
     .map_err(|e| AppError::internal(e.to_string()))?
@@ -129,8 +205,102 @@ pub async fn get_mcp_inventory(
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let custom_paths = custom_read_only_paths(&store)?;
+        let states = load_resource_states(&store)?;
         let entries = mcp_inventory::discover_mcp_with_custom_paths(&custom_paths);
-        Ok(mcp_inventory::inventory_rows(&entries))
+        let mut rows = mcp_inventory::inventory_rows(&entries);
+        decorate_mcp_rows(&mut rows, &states);
+        Ok(rows)
+    })
+    .await
+    .map_err(|e| AppError::internal(e.to_string()))?
+}
+
+#[tauri::command]
+pub async fn set_inventory_resource_state(
+    resource_kind: String,
+    path: String,
+    ignored: Option<bool>,
+    hidden: Option<bool>,
+    note: Option<String>,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<ResourceState, AppError> {
+    if resource_kind != "skill" && resource_kind != "mcp" {
+        return Err(AppError::invalid_input("Unknown inventory resource kind"));
+    }
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut states = load_resource_states(&store)?;
+        let key = resource_key(&resource_kind, &path);
+        let state = states.entry(key).or_default();
+        if let Some(value) = ignored {
+            state.ignored = value;
+        }
+        if let Some(value) = hidden {
+            state.hidden = value;
+        }
+        if let Some(value) = note {
+            state.note = value;
+        }
+        let result = state.clone();
+        save_resource_states(&store, &states)?;
+        Ok(result)
+    })
+    .await
+    .map_err(|e| AppError::internal(e.to_string()))?
+}
+
+fn read_skill_markdown(path: &std::path::Path) -> Result<String, AppError> {
+    for filename in ["SKILL.md", "skill.md"] {
+        let candidate = path.join(filename);
+        if candidate.is_file() {
+            return std::fs::read_to_string(&candidate).map_err(AppError::io);
+        }
+    }
+    Err(AppError::not_found(format!(
+        "No SKILL.md found in {}",
+        path.display()
+    )))
+}
+
+#[tauri::command]
+pub async fn get_adopt_diff(
+    source_path: String,
+    skill_name: String,
+    scope: String,
+    project_id: Option<String>,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<AdoptDiff, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let source = PathBuf::from(&source_path);
+        if !source.is_dir() {
+            return Err(AppError::not_found("Adopt source directory not found"));
+        }
+        let source_content = read_skill_markdown(&source)?;
+        let resolved = match scope.as_str() {
+            "user" => canonical::resolve_user_root()?,
+            "project" => {
+                let project_id = project_id.ok_or_else(|| {
+                    AppError::invalid_input("Project id is required for project Adopt")
+                })?;
+                canonical::resolve_project_root(&store, &project_id)?.1
+            }
+            _ => return Err(AppError::invalid_input("Unknown Adopt scope")),
+        };
+        let target = canonical::skill_dir(&resolved, &skill_name)?;
+        let original = if target.join("SKILL.md").is_file() {
+            std::fs::read_to_string(target.join("SKILL.md")).map_err(AppError::io)?
+        } else if target.join("skill.md").is_file() {
+            std::fs::read_to_string(target.join("skill.md")).map_err(AppError::io)?
+        } else {
+            String::new()
+        };
+        Ok(AdoptDiff {
+            original,
+            updated: source_content,
+            source_path: source.display().to_string(),
+            target_path: target.display().to_string(),
+        })
     })
     .await
     .map_err(|e| AppError::internal(e.to_string()))?

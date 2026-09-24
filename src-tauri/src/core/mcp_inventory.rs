@@ -72,6 +72,9 @@ pub struct McpInventoryRow {
     pub id: String,
     pub name: String,
     pub sources: Vec<McpHarnessStatus>,
+    pub ignored: bool,
+    pub hidden: bool,
+    pub note: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -101,6 +104,9 @@ pub struct SkillInventoryRow {
     pub system: bool,
     pub read_only: bool,
     pub native_consumers: Vec<String>,
+    pub ignored: bool,
+    pub hidden: bool,
+    pub note: String,
 }
 
 fn hash_value(value: &Value) -> String {
@@ -346,6 +352,9 @@ pub fn inventory_rows(entries: &[McpEntry]) -> Vec<McpInventoryRow> {
                 id: entry.id.clone(),
                 name: entry.name.clone(),
                 sources: vec![source],
+                ignored: false,
+                hidden: false,
+                note: String::new(),
             }
         })
         .collect()
@@ -408,6 +417,9 @@ pub fn discover_skills_with_custom_paths(custom_paths: &[PathBuf]) -> Vec<SkillI
             system: false,
             read_only: false,
             native_consumers: native.clone(),
+            ignored: false,
+            hidden: false,
+            note: String::new(),
         });
     }
 
@@ -449,6 +461,9 @@ pub fn discover_skills_with_custom_paths(custom_paths: &[PathBuf]) -> Vec<SkillI
                     } else {
                         Vec::new()
                     },
+                    ignored: false,
+                    hidden: false,
+                    note: String::new(),
                 });
             }
         }
@@ -475,6 +490,9 @@ pub fn discover_skills_with_custom_paths(custom_paths: &[PathBuf]) -> Vec<SkillI
                 system: false,
                 read_only: true,
                 native_consumers: Vec::new(),
+                ignored: false,
+                hidden: false,
+                note: String::new(),
             });
         }
     }
@@ -523,6 +541,9 @@ pub fn discover_project_skills_at(
             system: false,
             read_only: false,
             native_consumers: native.clone(),
+            ignored: false,
+            hidden: false,
+            note: String::new(),
         });
     }
 
@@ -548,6 +569,9 @@ pub fn discover_project_skills_at(
                     system: false,
                     read_only: true,
                     native_consumers: Vec::new(),
+                    ignored: false,
+                    hidden: false,
+                    note: String::new(),
                 });
             }
         }

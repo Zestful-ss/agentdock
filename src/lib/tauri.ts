@@ -551,6 +551,9 @@ export interface SkillInventoryRow {
   system: boolean;
   read_only: boolean;
   native_consumers: string[];
+  ignored: boolean;
+  hidden: boolean;
+  note: string;
 }
 
 export type McpTransport = "stdio" | "streamable_http" | "legacy_sse" | "unknown";
@@ -572,6 +575,22 @@ export interface McpInventoryRow {
   id: string;
   name: string;
   sources: McpHarnessStatus[];
+  ignored: boolean;
+  hidden: boolean;
+  note: string;
+}
+
+export interface InventoryResourceState {
+  ignored: boolean;
+  hidden: boolean;
+  note: string;
+}
+
+export interface AdoptDiff {
+  original: string;
+  updated: string;
+  source_path: string;
+  target_path: string;
 }
 
 export interface CanonicalRoots {
@@ -612,6 +631,32 @@ export const getProjectSkillInventory = (projectId: string) =>
 
 export const getMcpInventory = () =>
   invoke<McpInventoryRow[]>("get_mcp_inventory");
+
+export const setInventoryResourceState = (
+  resourceKind: "skill" | "mcp",
+  path: string,
+  state: Partial<InventoryResourceState>,
+) =>
+  invoke<InventoryResourceState>("set_inventory_resource_state", {
+    resourceKind,
+    path,
+    ignored: state.ignored ?? null,
+    hidden: state.hidden ?? null,
+    note: state.note ?? null,
+  });
+
+export const getAdoptDiff = (
+  sourcePath: string,
+  skillName: string,
+  scope: CanonicalScope,
+  projectId: string | null,
+) =>
+  invoke<AdoptDiff>("get_adopt_diff", {
+    sourcePath,
+    skillName,
+    scope,
+    projectId,
+  });
 
 export const adoptSkillToUser = (sourcePath: string, replace?: boolean) =>
   invoke<string>("adopt_skill_to_user", { sourcePath, replace: replace ?? null });
