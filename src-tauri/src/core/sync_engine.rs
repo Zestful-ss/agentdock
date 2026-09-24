@@ -307,10 +307,6 @@ pub fn sync_skill(
     // preflight: a preflight result cannot authorize a later deletion (#363).
     let state = authorize_replacement(source, target, policy)?;
 
-    // A real write to a watched dir follows: mute the watcher so this
-    // app-initiated change doesn't echo back as a redundant refresh (#248).
-    crate::core::file_watcher::mute_self_writes(target);
-
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create parent dir {:?}", parent))?;
@@ -457,15 +453,12 @@ pub fn remove_classified_target(target: &Path, state: TargetState) -> Result<()>
     match state {
         TargetState::Absent => Ok(()),
         TargetState::LinkToSource | TargetState::ForeignLink => {
-            crate::core::file_watcher::mute_self_writes(target);
             remove_link(target)
         }
         TargetState::RealFile => {
-            crate::core::file_watcher::mute_self_writes(target);
             std::fs::remove_file(target).map_err(Into::into)
         }
         TargetState::RealDir => {
-            crate::core::file_watcher::mute_self_writes(target);
             // Only reachable via `Recorded { mode: "copy" }` or UserConfirmed.
             std::fs::remove_dir_all(target).map_err(Into::into)
         }
@@ -561,7 +554,6 @@ pub fn remove_target(target: &Path) -> Result<()> {
     };
 
     // An actual removal from a watched dir follows: mute the self-write echo.
-    crate::core::file_watcher::mute_self_writes(target);
 
     if metadata.file_type().is_symlink() {
         #[cfg(windows)]

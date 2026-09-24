@@ -39,11 +39,8 @@ const checks = [
     'workflow source alignment',
     workflow.includes('Zestful-ss/agentdock') && prepareWorkflow.includes('Zestful-ss/agentdock'),
   ],
-  [
-    'updater repository alignment',
-    tauri.plugins?.updater?.endpoints?.[0]?.includes('/Zestful-ss/agentdock/'),
-  ],
-  ['Linux ARM64 updater check', workflow.includes('linux-aarch64')],
+  ['updater disabled', !tauri.plugins?.updater && !tauri.bundle?.createUpdaterArtifacts],
+  ['updater release checks removed', !workflow.includes('verify-updater-assets') && !workflow.includes('latest.json')],
 ];
 
 const failed = checks.filter(([, ok]) => !ok).map(([name]) => name);

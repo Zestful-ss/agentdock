@@ -40,13 +40,12 @@
 - **统一技能库** —— 从 Git 仓库、本地目录、`.zip` / `.skill` 文件安装 Skills。应用元数据（SQLite、缓存、日志）仍位于兼容路径 `~/.skills-manager`，它不是技能库。
 - **My Skills** —— 浏览和整理技能库，管理标签与 Preset 成员关系。Preset 是元数据整理，不会部署或删除 Harness 文件。
 - **Inventory** —— 只读查看每个 Harness 实际发现的 Skills 与 MCP，包括原生 `.agents` 消费者。
-- **Project Workspaces** —— 管理 `<repo>/.agents/skills` 中的项目 Skills，并与用户技能库比较、导入或导出。
+- **Project Workspaces** —— 管理 `<repo>/.agents/skills` 中的项目 Skills，并与用户技能库比较。
 - **安装与来源** —— 支持本地目录、Git、压缩包和 skills.sh CLI 安装；保留来源、revision、标签和更新状态。
-- **更新与重导入** —— 对 Git Skills 检查远端更新；本地修改会触发保护，不会静默覆盖。
-- **发现配置** —— Agent 开关、路径编辑和自定义工具只改变 Inventory 的发现配置，不执行 Harness 写入。
-- **备份命令** —— Git remote helpers 仍可从 **设置** 和首次运行恢复流程使用；当前版本没有侧边栏 Backup 页面。
+- **手动更新** —— 对 Git Skills 手动检查远端更新；本地修改会触发保护，不会静默覆盖。
+- **发现配置** —— Agent 开关、路径编辑和自定义只读路径只改变 Inventory 的发现配置，不执行 Harness 写入。
+- **显式 Adopt** —— 从 Harness 或外部资源复制快照到用户库或项目库，每次都选择目标；已存在时先取消或确认差异，再 Replace。
 - **活动日志与导出** —— 记录安装、删除、更新和纳管操作；在 **设置 → 导出日志** 打包诊断信息。
-- **应用内更新** —— 检查更新只负责通知；安装和重启都需要用户明确点击。
 
 > 文档中的截图待按当前 V1.1 界面重新录制；行为说明以本文和 `architecture/ARCHITECTURE.md` 为准。
 
@@ -68,13 +67,13 @@ AgentDock 的 Homebrew cask 将随首个 AgentDock Release 一起迁移。在 ca
 2. 打开 **My Skills** 整理技能库、标签和 Preset 成员关系。
 3. 打开 **Inventory** 查看 Harness 实际发现的 Skills 与 MCP；这里是只读观察面。
 4. 如需管理项目 Skills，打开 **Project** 并选择 `<repo>/.agents/skills`。
-5. 在 **Settings** 配置发现路径、主题、语言、Git remote 和更新检查。
+5. 在 **Settings** 配置发现路径、自定义只读根目录、主题、语言、代理和诊断。
 
 ## 让你的 Agent 管理 Skills
 
 Claude Code、Codex、Cursor 等可以通过 [`manage-skills`](skills/manage-skills/SKILL.md) skill 和 `agentdock-cli` 管理 canonical 技能库。Agent 不会绕过应用直接写入 Harness 目录；来源元数据、Preset 归属和更新状态因此保持一致。
 
-应用启动时会发布一份与桌面端版本一致的 CLI。旧 Agent 仍可使用 `skills-manager-cli` 兼容名称；新安装优先使用 `agentdock-cli`。
+CLI 通过 `npm run cli:install` 或独立 Release 资产显式安装。应用不会在后台发布或刷新 CLI 副本；旧 Agent 仍可使用 `skills-manager-cli` 兼容名称，新安装优先使用 `agentdock-cli`。
 
 CLI 也可以独立安装：
 
@@ -82,15 +81,9 @@ CLI 也可以独立安装：
 npx skills add Zestful-ss/agentdock
 ```
 
-## Git 备份与多设备同步
+## 本地运行
 
-Git backup helpers 仍然保留，但入口位于 **Settings → Git Sync Configuration** 和首次运行恢复对话框，而不是侧边栏页面。
-
-- **连接** —— 支持 GitHub 登录、任意 HTTPS + PAT、SSH 或自建 Git 服务。令牌只保存在系统钥匙串。
-- **同步** —— 本地改动会在空闲后提交并推送；远端更新会在仓库锁内合并。
-- **冲突** —— 同一 Skill 的并发修改会保留本机版本并进入待处理状态；应用不会静默覆盖用户内容。
-- **快照** —— 备份历史可恢复；恢复前会先保留当前状态。
-- **隐私** —— API Key、令牌、代理配置和本机路径不会进入远端仓库。
+AgentDock 是 Windows 优先的本机管理器，不提供 Git 备份、多设备同步、应用内更新、托盘后台或通用技能库导入导出。SQLite、标签、Preset、项目和 canonical Skills 都保留在本机；Harness 与 MCP 只读观察。
 
 ## V1 发现来源
 
@@ -138,6 +131,11 @@ npm run cli -- skills status react-best-practices
 npm run cli -- skills check --all
 npm run cli -- skills update --all
 npm run cli -- skills adopt ~/.claude/skills --dry-run
+
+# 只读资源盘点与自定义路径
+npm run cli -- --json inventory skills
+npm run cli -- --json inventory mcp
+npm run cli -- --json inventory paths list
 ```
 
 命令组包括：
@@ -145,13 +143,13 @@ npm run cli -- skills adopt ~/.claude/skills --dry-run
 - `agents`（兼容别名 `tools`）：查看发现来源
 - `skills`：管理 canonical 技能库、标签和 Preset 成员关系
 - `presets`：创建、修改、删除、整理和查看 Preset
-- `git`：操作 Git 备份仓库
+- `inventory`：只读盘点 Skills/MCP，并管理自定义只读路径
 
 破坏性命令支持相应的 `--dry-run`；`remove` 仍要求显式 `--yes`。机器调用建议始终加 `--json`。
 
 ### 二进制放在哪
 
-应用启动时会把自己那份 CLI 复制到 `~/.skills-manager/bin/agentdock-cli`，版本永远与正在运行的应用一致，Agent 不需要修改 PATH 就能找到它。旁边的 `.version` 标记只在副本校验通过后写入，并在每次重新发布前删除；旧版 Agent 仍可回退到 `skills-manager-cli` 路径。
+CLI 通过 `npm run cli:install` 或独立 Release 资产显式安装。应用不会在启动时把 CLI 复制到 `~/.skills-manager/bin`；旧版 Agent 仍可使用 `skills-manager-cli` 路径。
 
 ```bash
 npm run cli:install
@@ -172,7 +170,7 @@ npm run cli:build
 
 ## 常见问题
 
-**macOS 打不开应用。** 从 **v1.29.0** 起，发布版本都经过 Apple Developer ID 签名与公证。若仍看到「应用已损坏」，请升级到最新版本。升级后 macOS 可能再次询问 `skills-manager-git-backup` 钥匙串权限，请选择「始终允许」。
+**macOS 打不开应用。** 从 **v1.29.0** 起，发布版本都经过 Apple Developer ID 签名与公证。若仍看到「应用已损坏」，请升级到最新版本。
 
 其它问题请[提交 issue](https://github.com/Zestful-ss/agentdock/issues)，并附上 **设置 → 导出日志** 生成的压缩包。
 

@@ -6,9 +6,7 @@ import {
   Layers,
   Download,
   Settings as SettingsIcon,
-  FolderOpen,
   Folder,
-  Home,
   ArrowRight,
 } from "lucide-react";
 import { useApp } from "../context/AppContext";
@@ -145,13 +143,6 @@ export function CommandPalette() {
 
     const actionDefs: PaletteItem[] = [
       {
-        id: "action:dashboard",
-        kind: "action",
-        label: t("sidebar.dashboard"),
-        icon: <Home className="h-3.5 w-3.5" />,
-        run: () => navigate("/"),
-      },
-      {
         id: "action:my-skills",
         kind: "action",
         label: t("sidebar.mySkills"),
@@ -164,13 +155,6 @@ export function CommandPalette() {
         label: t("sidebar.installSkills"),
         icon: <Download className="h-3.5 w-3.5" />,
         run: () => navigate("/install"),
-      },
-      {
-        id: "action:install-local",
-        kind: "action",
-        label: t("commandPalette.scanImport"),
-        icon: <FolderOpen className="h-3.5 w-3.5" />,
-        run: () => navigate("/install?tab=local"),
       },
       {
         id: "action:settings",

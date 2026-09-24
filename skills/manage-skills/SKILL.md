@@ -5,55 +5,21 @@ description: Manage the user's canonical agent-skill library (~/.agents/skills a
 
 ## Before doing anything
 
-1. **Resolve the CLI first, then use the path it prints.** Run this once (POSIX
-   shell):
+1. **Resolve the CLI first, then use the path it prints.** AgentDock does not
+   publish a background bridge copy. Prefer the explicitly installed binary:
 
    ```bash
-   D="$HOME/.skills-manager/bin"  # legacy storage root, retained for compatibility
-   B="$D/agentdock-cli"; [ -e "$B" ] || B="$D/agentdock-cli.exe"
-   LEGACY="$D/skills-manager-cli"; [ -e "$LEGACY" ] || LEGACY="$D/skills-manager-cli.exe"
-   if [ -e "$B" ]; then
-     if [ -s "$D/.version" ] && [ -x "$B" ]; then
-       echo "$B"
-     else
-       echo BRIDGE_BROKEN
-     fi
-   elif [ -e "$LEGACY" ]; then
-     if [ -s "$D/.version" ] && [ -x "$LEGACY" ]; then
-       echo "$LEGACY"
-     else
-       echo BRIDGE_BROKEN
-     fi
-   elif [ -s "$D/.version" ]; then
-     echo BRIDGE_BROKEN
-   else
-     P="$(command -v agentdock-cli 2>/dev/null || command -v skills-manager-cli 2>/dev/null || true)"
-     [ -x "$P" ] && echo "$P"
-   fi
+   P="$(command -v agentdock-cli 2>/dev/null || command -v skills-manager-cli 2>/dev/null || true)"
+   [ -x "$P" ] && echo "$P"
    ```
 
    **Substitute the printed path into every command below**, wherever the
    examples write `$SM`. Do not carry `$SM` as a shell variable: each command
    you run is a new shell, so an assignment made here is gone by the next one.
 
-   The three outcomes:
-
-   - **A path under `~/.skills-manager/bin`** — the desktop app published this
-     copy, and the `.version` stamp appears only after it has been verified, so
-     it always matches the app the user is running. Use it.
-   - **`BRIDGE_BROKEN`** — something the app left behind is here but does not
-     add up: an unstamped binary, or a stamp with no binary beside it. Either is
-     what a copy that failed half-way leaves. **Stop.** Do not go looking
-     for another CLI: that binary may predate a safety fix, and the machine has
-     a desktop app whose version nothing here can match. Ask the user to open
-     the AgentDock app once, which republishes it.
-   - **A path from PATH** — nothing was ever published here, so there is no
-     stale copy to worry about: this is a CLI-only machine (a server install, a
-     standalone download, a hand-built binary). Use it, but note it can be
-     older than a desktop app if one is also installed.
-
-   If nothing is printed at all, this skill doesn't apply — fall back to
-   find-skills, or tell the user to install AgentDock.
+   If nothing is printed, ask the user to install the standalone CLI with
+   `npm run cli:install` or place the release asset on PATH. Do not search for
+   or execute an unverified binary under the legacy metadata directory.
 2. **Always pass `--json` when you parse output yourself.** Pretty-printed output is for the user; JSON is for you. Errors include `ok=false`, a stable `code`, and `message` on stderr with a non-zero exit code.
 
 ```bash
@@ -69,7 +35,7 @@ Keep these three states separate:
 - **Preset membership**: `presets add-skill/remove-skill` organizes the library only (curation, not disk sync).
 - **Harness observation**: Inventory / agents list report what a harness already sees; they never write into harness dirs.
 
-Internally, presets are still stored as scenarios for backward-compatible Git Backup. The CLI and UI call them presets.
+Internally, presets are still stored as scenarios for SQLite/schema compatibility. The CLI and UI call them presets; they are curation metadata only.
 
 ## Install
 
@@ -152,6 +118,21 @@ Remove deletes the canonical library directory and its metadata row. Legacy Harn
 ```
 
 `skills status` reports what the library owns. Harness directories are observe-only in V1; there is no CLI path that writes them.
+
+## Inventory
+
+```bash
+"$SM" --json inventory skills
+"$SM" --json inventory mcp
+"$SM" --json inventory paths list
+"$SM" --json inventory paths add C:\\Tools\\shared-skills
+"$SM" --json inventory paths remove C:\\Tools\\shared-skills --dry-run
+```
+
+Inventory rows retain source and ownership. Duplicate names from different
+Harnesses are separate resources; MCP rows never expose commands, arguments,
+environment variables, headers, or raw config. Custom paths are read-only
+until an explicit Adopt copies a snapshot into a canonical library.
 
 ## Adopt skills installed elsewhere
 

@@ -1,9 +1,6 @@
-pub mod agent_workspace;
-pub mod git_backup;
 pub mod inventory;
 pub mod presets;
 pub mod projects;
-pub mod scan;
 pub mod settings;
 pub mod skills;
 pub mod tools;

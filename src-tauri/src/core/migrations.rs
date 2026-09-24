@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use rusqlite::Connection;
 
 /// Current schema version. Bump this when adding a new migration.
-const LATEST_VERSION: u32 = 8;
+const LATEST_VERSION: u32 = 9;
 
 /// Run all pending migrations on the database.
 ///
@@ -55,6 +55,7 @@ fn migrate_step(conn: &Connection, from_version: u32) -> Result<()> {
         5 => migrate_v5_to_v6(conn),
         6 => migrate_v6_to_v7(conn),
         7 => migrate_v7_to_v8(conn),
+        8 => migrate_v8_to_v9(conn),
         _ => bail!("unknown migration version: {from_version}"),
     }
 }
@@ -318,6 +319,36 @@ fn migrate_v7_to_v8(conn: &Connection) -> Result<()> {
         "DELETE FROM settings WHERE key = 'project_default_export_agents'",
         [],
     )?;
+    Ok(())
+}
+
+/// v8 → v9: remove state owned by the retired remote-sync/updater/tray
+/// surfaces. Skills, tags, Presets, projects, and the canonical paths remain
+/// untouched; only stale preferences and the merge projection are removed.
+fn migrate_v8_to_v9(conn: &Connection) -> Result<()> {
+    let has_settings: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'settings')",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_settings {
+        conn.execute_batch(
+            "DELETE FROM settings WHERE key IN (
+                'git_backup_remote_url',
+                'git_backup_engine',
+                'backup_device_name',
+                'backup_auto_enabled',
+                'backup_last_auto_error',
+                'merge_engine',
+                'auto_update_check_interval',
+                'auto_update_apply',
+                'auto_update_last_run_at',
+                'close_action',
+                'show_tray_icon'
+            );",
+        )?;
+    }
+    conn.execute_batch("DROP TABLE IF EXISTS pending_conflicts;")?;
     Ok(())
 }
 

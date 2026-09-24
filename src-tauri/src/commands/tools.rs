@@ -2,7 +2,7 @@ use serde::Serialize;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
-use tauri::{AppHandle, State};
+use tauri::State;
 
 use crate::core::error::AppError;
 use crate::core::skill_store::SkillStore;
@@ -64,15 +64,8 @@ pub async fn get_tool_status(
     .await?
 }
 
-fn refresh_tray_menu_best_effort(app: &AppHandle) {
-    if let Err(err) = crate::refresh_tray_menu(app) {
-        log::warn!("Failed to refresh tray menu after tool mutation: {err}");
-    }
-}
-
 #[tauri::command]
 pub async fn set_tool_enabled(
-    app: AppHandle,
     key: String,
     enabled: bool,
     store: State<'_, Arc<SkillStore>>,
@@ -82,9 +75,6 @@ pub async fn set_tool_enabled(
         set_tool_enabled_internal(&store, &key, enabled)
     })
     .await?;
-    if result.is_ok() {
-        refresh_tray_menu_best_effort(&app);
-    }
     result
 }
 
@@ -113,7 +103,6 @@ pub fn set_tool_enabled_internal(
 
 #[tauri::command]
 pub async fn set_all_tools_enabled(
-    app: AppHandle,
     enabled: bool,
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<(), AppError> {
@@ -128,9 +117,6 @@ pub async fn set_all_tools_enabled(
         }
     })
     .await?;
-    if result.is_ok() {
-        refresh_tray_menu_best_effort(&app);
-    }
     result
 }
 

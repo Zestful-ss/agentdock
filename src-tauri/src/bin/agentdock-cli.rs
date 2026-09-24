@@ -3,12 +3,14 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use anyhow::{Context, anyhow, bail};
-use app_lib::commands::{presets as preset_cmd, skills as cmd, tools as tool_cmd};
+use app_lib::commands::{
+    inventory as inventory_cmd, presets as preset_cmd, skills as cmd, tools as tool_cmd,
+};
 use app_lib::core::{
     app_state, audit_log::AuditDraft, canonical, central_repo, content_hash, error::AppError,
-    git_backup, git_fetcher, installer, merge, repo_lock::RepoLock, scenario_service,
-    skill_metadata, skill_store::SkillStore, skillssh_api, sync_engine, sync_metadata,
-    tool_adapters, tool_service,
+    git_fetcher, installer, mcp_inventory, paths, repo_lock::RepoLock, scenario_service, skill_metadata,
+    skill_store::SkillStore, skillssh_api, sync_engine, sync_metadata, tool_adapters,
+    tool_service,
 };
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
@@ -33,7 +35,41 @@ enum Commands {
     Skills(SkillsArgs),
     #[command(alias = "scenarios")]
     Presets(PresetArgs),
-    Git(GitArgs),
+    Inventory(InventoryArgs),
+}
+
+#[derive(Args, Debug)]
+struct InventoryArgs {
+    #[command(subcommand)]
+    command: InventoryCommand,
+}
+
+#[derive(Subcommand, Debug)]
+enum InventoryCommand {
+    Skills,
+    Mcp,
+    Paths(InventoryPathsArgs),
+}
+
+#[derive(Args, Debug)]
+struct InventoryPathsArgs {
+    #[command(subcommand)]
+    command: InventoryPathsCommand,
+}
+
+#[derive(Subcommand, Debug)]
+enum InventoryPathsCommand {
+    List,
+    Add {
+        path: PathBuf,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    Remove {
+        path: PathBuf,
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -94,15 +130,6 @@ enum SkillsCommand {
     },
     Show {
         reference: String,
-    },
-    Export {
-        reference: String,
-        #[arg(long)]
-        dest: PathBuf,
-        /// Overwrite the destination if it already exists. Without this, an
-        /// existing destination is left untouched and the command fails.
-        #[arg(long)]
-        force: bool,
     },
     Install {
         /// Ref: local path, git URL, or owner/repo[@skill] / owner/repo/skill
@@ -345,40 +372,6 @@ enum PresetCommand {
         #[arg(required = true)]
         skills: Vec<String>,
     },
-}
-
-#[derive(Args, Debug)]
-struct GitArgs {
-    #[command(subcommand)]
-    command: GitCommand,
-}
-
-#[derive(Subcommand, Debug)]
-enum GitCommand {
-    Status,
-    Init,
-    Clone {
-        url: String,
-    },
-    SetRemote {
-        url: String,
-    },
-    Pull,
-    Push,
-    Commit {
-        #[arg(short, long)]
-        message: String,
-    },
-    Versions {
-        #[arg(long)]
-        limit: Option<usize>,
-    },
-    Restore {
-        tag: String,
-    },
-    /// Remove refs/skills-manager/* that a `git push --mirror`/--all style
-    /// operation uploaded to the backup remote. Local sync refs are kept.
-    PruneSyncRefs,
 }
 
 #[derive(Debug, Serialize)]
@@ -687,7 +680,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         Commands::Tools(args) => run_tools(args, &store, cli.json),
         Commands::Skills(args) => run_skills(args, &store, cli.json),
         Commands::Presets(args) => run_presets(args, &store, cli.json),
-        Commands::Git(args) => run_git(args, &store, cli.skills_root.is_some(), cli.json),
+        Commands::Inventory(args) => run_inventory(args, &store, cli.json),
     }
 }
 
@@ -782,6 +775,75 @@ fn run_set_agents_enabled(
     Ok(reports)
 }
 
+fn run_inventory(
+    args: InventoryArgs,
+    store: &SkillStore,
+    json: bool,
+) -> anyhow::Result<()> {
+    match args.command {
+        InventoryCommand::Skills => {
+            let paths = inventory_cmd::custom_read_only_paths(store).map_err(map_app_err)?;
+            print_json(
+                &mcp_inventory::discover_skills_with_custom_paths(&paths),
+                json,
+            );
+        }
+        InventoryCommand::Mcp => {
+            let paths = inventory_cmd::custom_read_only_paths(store).map_err(map_app_err)?;
+            let entries = mcp_inventory::discover_mcp_with_custom_paths(&paths);
+            print_json(&mcp_inventory::inventory_rows(&entries), json);
+        }
+        InventoryCommand::Paths(paths_args) => match paths_args.command {
+            InventoryPathsCommand::List => {
+                let paths = inventory_cmd::custom_read_only_paths(store).map_err(map_app_err)?;
+                let values: Vec<String> = paths
+                    .into_iter()
+                    .map(|path| path.to_string_lossy().to_string())
+                    .collect();
+                print_json(&values, json);
+            }
+            InventoryPathsCommand::Add { path, dry_run } => {
+                let mut values = inventory_cmd::custom_read_only_paths(store)
+                    .map_err(map_app_err)?
+                    .into_iter()
+                    .map(|value| value.to_string_lossy().to_string())
+                    .collect::<Vec<_>>();
+                values.push(path.to_string_lossy().to_string());
+                let result = if dry_run {
+                    values
+                } else {
+                    inventory_cmd::normalize_custom_read_only_paths(store, values)
+                        .map_err(map_app_err)?
+                };
+                print_json(
+                    &serde_json::json!({ "ok": true, "dry_run": dry_run, "paths": result }),
+                    json,
+                );
+            }
+            InventoryPathsCommand::Remove { path, dry_run } => {
+                let target = paths::identity_key(&path);
+                let values = inventory_cmd::custom_read_only_paths(store)
+                    .map_err(map_app_err)?
+                    .into_iter()
+                    .filter(|value| paths::identity_key(value) != target)
+                    .map(|value| value.to_string_lossy().to_string())
+                    .collect::<Vec<_>>();
+                let result = if dry_run {
+                    values
+                } else {
+                    inventory_cmd::normalize_custom_read_only_paths(store, values)
+                        .map_err(map_app_err)?
+                };
+                print_json(
+                    &serde_json::json!({ "ok": true, "dry_run": dry_run, "paths": result }),
+                    json,
+                );
+            }
+        },
+    }
+    Ok(())
+}
+
 // ── skills ────────────────────────────────────────────────────────────────
 
 fn run_skills(args: SkillsArgs, store: &SkillStore, json: bool) -> anyhow::Result<()> {
@@ -808,17 +870,6 @@ fn run_skills(args: SkillsArgs, store: &SkillStore, json: bool) -> anyhow::Resul
             json,
         ),
         SkillsCommand::Show { reference } => print_json(&show_skill(store, &reference)?, json),
-        SkillsCommand::Export {
-            reference,
-            dest,
-            force,
-        } => {
-            let result = export_skill(store, &reference, &dest, force)?;
-            print_json(
-                &serde_json::json!({"ok": true, "destination": result}),
-                json,
-            );
-        }
         SkillsCommand::Install {
             reference,
             local,
@@ -1305,40 +1356,6 @@ fn verify_deployment_state(
         failures,
         preserved,
     })
-}
-
-fn export_skill(
-    store: &SkillStore,
-    reference: &str,
-    dest: &Path,
-    force: bool,
-) -> anyhow::Result<String> {
-    let skill = resolve_skill(store, reference)?;
-    let source = PathBuf::from(&skill.central_path);
-
-    // `dest` is an arbitrary user-supplied path, so an unguarded export is a
-    // recursive delete of whatever they typed (#363) — `--dest ~/Documents`
-    // used to wipe it and leave a SKILL.md. Nothing at an export destination
-    // is ever "ours", so overwriting has to be asked for explicitly.
-    if !force {
-        let state = sync_engine::classify_target(dest, Some(&source))
-            .with_context(|| format!("Cannot inspect export destination {}", dest.display()))?;
-        if state != sync_engine::TargetState::Absent {
-            bail!(
-                "Export destination {} already exists; refusing to overwrite it. \
-                 Choose a path that does not exist, or pass --force to replace it.",
-                dest.display()
-            );
-        }
-    }
-
-    let policy = if force {
-        sync_engine::ReplacePolicy::UserConfirmed
-    } else {
-        sync_engine::ReplacePolicy::NoClobber
-    };
-    sync_engine::sync_skill(&source, dest, sync_engine::SyncMode::Copy, policy)?;
-    Ok(dest.to_string_lossy().to_string())
 }
 
 fn resolve_skill(
@@ -2918,87 +2935,6 @@ fn resolve_scenario(
         0 => Err(anyhow!("preset not found: {reference}")),
         _ => Err(anyhow!("preset reference is ambiguous: {reference}")),
     }
-}
-
-// ── git ───────────────────────────────────────────────────────────────────
-
-fn run_git(
-    args: GitArgs,
-    store: &SkillStore,
-    has_skills_root: bool,
-    json: bool,
-) -> anyhow::Result<()> {
-    match args.command {
-        GitCommand::Status => {
-            print_json(&git_backup::get_status(&central_repo::skills_dir())?, json)
-        }
-        GitCommand::Init => {
-            // No settings store on this path; the hostname default matches
-            // what the GUI derives, and the GUI reconciles the repo identity
-            // on its next backup anyway.
-            git_backup::init_repo(
-                &central_repo::skills_dir(),
-                &git_backup::default_device_name(),
-            )?;
-            print_json(&git_backup::get_status(&central_repo::skills_dir())?, json);
-        }
-        GitCommand::Clone { url } => {
-            let target = central_repo::skills_dir();
-            if has_skills_root {
-                git_backup::clone_into_strict(&target, &url)?;
-            } else {
-                git_backup::clone_into(&target, &url)?;
-            }
-            print_json(&git_backup::get_status(&target)?, json);
-        }
-        GitCommand::SetRemote { url } => {
-            git_backup::set_remote(&central_repo::skills_dir(), &url)?;
-            print_json(&git_backup::get_status(&central_repo::skills_dir())?, json);
-        }
-        GitCommand::Pull => {
-            // Same engine gate as the GUI sync (object merge by default,
-            // merge_engine=system opts out). A raw line merge from this CLI
-            // would read as an old-client violation on other devices (§6).
-            let dir = central_repo::skills_dir();
-            {
-                let _lock = RepoLock::acquire_foreground("git pull")?;
-                let device = store
-                    .get_setting("backup_device_name")
-                    .ok()
-                    .flatten()
-                    .map(|v| git_backup::sanitize_device_name(&v))
-                    .filter(|v| !v.is_empty())
-                    .unwrap_or_else(git_backup::default_device_name);
-                let _ = git_backup::configure_device_identity(&dir, &device);
-                merge::gated_pull_unlocked(store, &dir)?;
-            }
-            // Reconcile the DB from the merged metadata (takes its own lock).
-            sync_metadata::reindex_from_metadata(store)?;
-            print_json(&git_backup::get_status(&dir)?, json);
-        }
-        GitCommand::Push => {
-            git_backup::push(&central_repo::skills_dir())?;
-            print_json(&git_backup::get_status(&central_repo::skills_dir())?, json);
-        }
-        GitCommand::Commit { message } => {
-            git_backup::commit_all(&central_repo::skills_dir(), &message)?;
-            let tag = git_backup::create_snapshot_tag(&central_repo::skills_dir())?;
-            print_json(&serde_json::json!({"ok": true, "tag": tag}), json);
-        }
-        GitCommand::Versions { limit } => print_json(
-            &git_backup::list_snapshot_versions(&central_repo::skills_dir(), limit)?,
-            json,
-        ),
-        GitCommand::Restore { tag } => {
-            git_backup::restore_snapshot_version(&central_repo::skills_dir(), &tag)?;
-            print_json(&git_backup::get_status(&central_repo::skills_dir())?, json);
-        }
-        GitCommand::PruneSyncRefs => {
-            let removed = git_backup::prune_hidden_refs_on_remote(&central_repo::skills_dir())?;
-            print_json(&serde_json::json!({ "removed": removed }), json);
-        }
-    }
-    Ok(())
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────

@@ -1,25 +1,109 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use serde_json::from_str as json_from_str;
 use tauri::State;
 
 use crate::core::canonical::{self, MigrationEntry, SkillDocument, UserSkillRegistration};
 use crate::core::content_hash;
 use crate::core::error::AppError;
 use crate::core::mcp_inventory::{self, McpInventoryRow, SkillInventoryRow};
+use crate::core::paths;
 use crate::core::skill_metadata;
 use crate::core::skill_store::SkillStore;
 use crate::core::sync_metadata;
 
+const CUSTOM_READ_ONLY_PATHS_KEY: &str = "custom_read_only_skill_paths";
+
+pub fn custom_read_only_paths(store: &SkillStore) -> Result<Vec<PathBuf>, AppError> {
+    let raw = store
+        .get_setting(CUSTOM_READ_ONLY_PATHS_KEY)
+        .map_err(AppError::db)?;
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    let values: Vec<String> = json_from_str(&raw).map_err(AppError::internal)?;
+    let mut result = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for value in values {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let path = paths::expand_windows_path(trimmed);
+        let key = paths::identity_key(&path);
+        if seen.insert(key) {
+            result.push(path);
+        }
+    }
+    Ok(result)
+}
+
+pub fn normalize_custom_read_only_paths(
+    store: &SkillStore,
+    values: Vec<String>,
+) -> Result<Vec<String>, AppError> {
+    let mut result = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for value in values {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let path = paths::expand_windows_path(trimmed);
+        let key = paths::identity_key(&path);
+        if seen.insert(key) {
+            result.push(path.to_string_lossy().to_string());
+        }
+    }
+    let encoded = serde_json::to_string(&result).map_err(AppError::internal)?;
+    store
+        .set_setting(CUSTOM_READ_ONLY_PATHS_KEY, &encoded)
+        .map_err(AppError::db)?;
+    Ok(result)
+}
+
 #[tauri::command]
-pub async fn get_skill_inventory() -> Result<Vec<SkillInventoryRow>, AppError> {
-    tauri::async_runtime::spawn_blocking(mcp_inventory::discover_skills)
-        .await
-        .map_err(|e| AppError::internal(e.to_string()))
+pub async fn get_skill_inventory(
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<Vec<SkillInventoryRow>, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let custom_paths = custom_read_only_paths(&store)?;
+        Ok(mcp_inventory::discover_skills_with_custom_paths(&custom_paths))
+    })
+    .await
+    .map_err(|e| AppError::internal(e.to_string()))?
 }
 
 /// Project skills by project **id** (resolved backend-side via `SkillStore`).
 /// The WebView never decides which directory is written to.
+#[tauri::command]
+pub async fn get_custom_read_only_paths(
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<Vec<String>, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        Ok(custom_read_only_paths(&store)?
+            .into_iter()
+            .map(|path| path.to_string_lossy().to_string())
+            .collect())
+    })
+    .await
+    .map_err(|e| AppError::internal(e.to_string()))?
+}
+
+#[tauri::command]
+pub async fn set_custom_read_only_paths(
+    paths: Vec<String>,
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<Vec<String>, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || normalize_custom_read_only_paths(&store, paths))
+        .await
+        .map_err(|e| AppError::internal(e.to_string()))?
+}
+
 #[tauri::command]
 pub async fn get_project_skill_inventory(
     project_id: String,
@@ -39,13 +123,17 @@ pub async fn get_project_skill_inventory(
 }
 
 #[tauri::command]
-pub async fn get_mcp_inventory() -> Result<Vec<McpInventoryRow>, AppError> {
-    tauri::async_runtime::spawn_blocking(|| {
-        let entries = mcp_inventory::discover_mcp();
-        mcp_inventory::inventory_rows(&entries)
+pub async fn get_mcp_inventory(
+    store: State<'_, Arc<SkillStore>>,
+) -> Result<Vec<McpInventoryRow>, AppError> {
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let custom_paths = custom_read_only_paths(&store)?;
+        let entries = mcp_inventory::discover_mcp_with_custom_paths(&custom_paths);
+        Ok(mcp_inventory::inventory_rows(&entries))
     })
     .await
-    .map_err(|e| AppError::internal(e.to_string()))
+    .map_err(|e| AppError::internal(e.to_string()))?
 }
 
 /// Adopt a discovered skill into User `~/.agents/skills`.
@@ -68,6 +156,22 @@ pub async fn adopt_skill_to_user(
         // "files changed, DB not changed" behind.
         sync_metadata::with_repo_lock("adopt skill", || {
             let resolved = canonical::resolve_user_root()?;
+            if replace.unwrap_or(false) {
+                let name = skill_metadata::infer_skill_name(&source);
+                let candidate = resolved.root.join(canonical::sanitize_component(&name)?);
+                let candidate_string = candidate.to_string_lossy().to_string();
+                if let Some(record) = store.get_skill_by_central_path(&candidate_string)? {
+                    if let Some(baseline) = record.content_hash.as_deref() {
+                        let live = content_hash::hash_directory_strict(&candidate)
+                            .map_err(AppError::io)?;
+                        if live != baseline {
+                            return Err(AppError::invalid_input(
+                                "Managed skill was modified locally; replacement was not applied",
+                            ));
+                        }
+                    }
+                }
+            }
             let dest =
                 canonical::install_skill_dir(&source, &resolved, replace.unwrap_or(false))?;
             let hash = content_hash::hash_directory(&dest).map_err(AppError::io)?;

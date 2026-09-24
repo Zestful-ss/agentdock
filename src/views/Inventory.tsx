@@ -109,7 +109,7 @@ export function Inventory() {
   );
 
   const adopt = async (row: SkillInventoryRow, target: "user" | "project", replace = false) => {
-    if (row.system || row.read_only) return;
+    if (row.system) return;
     if (target === "project" && !currentProject) {
       toast.error("Link a project workspace first");
       return;
@@ -397,8 +397,8 @@ export function Inventory() {
           ) : (
             mcp.map((row) => (
               <button
-                key={row.name}
-                onClick={() => setExpanded((cur) => (cur === row.name ? null : row.name))}
+                key={row.id}
+                onClick={() => setExpanded((cur) => (cur === row.id ? null : row.id))}
                 className="rounded-md border border-border-subtle bg-surface px-3 py-2 text-left hover:bg-surface-hover"
               >
                 <div className="flex items-center justify-between gap-2">
@@ -416,7 +416,7 @@ export function Inventory() {
                       </span>
                     ))}
                 </div>
-                {expanded === row.name ? (
+                {expanded === row.id ? (
                   <div className="mt-2 space-y-1 text-xs text-secondary">
                     {row.sources
                       .filter((source) => source.configured)
@@ -502,6 +502,9 @@ function SkillRow({
             <span className="font-medium text-primary">{row.name}</span>
             <span className="rounded bg-bg-secondary px-1.5 py-0.5 text-[11px] text-muted">
               {statusLabel(row.status)}
+            </span>
+            <span className="rounded bg-bg-secondary px-1.5 py-0.5 text-[11px] text-muted">
+              {row.source_kind} · {row.ownership}
             </span>
             <span className="text-[11px] text-muted">{row.source_display_name}</span>
           </div>

@@ -791,7 +791,7 @@ pub fn slugify_skill_names(names: Vec<String>) -> Vec<String> {
 }
 
 #[tauri::command]
-pub async fn export_skill_to_project(
+pub async fn copy_skill_to_project(
     store: State<'_, Arc<SkillStore>>,
     skill_id: String,
     project_id: String,
@@ -837,7 +837,7 @@ pub async fn update_project_skill_from_center(
         let managed = find_best_center_match(skill, &all_managed)
             .ok_or_else(|| AppError::not_found("No matching skill in center"))?;
 
-        // Mirror the global-workspace protection (agent_workspace.rs): never
+        // Mirror the canonical-workspace protection: never
         // overwrite a project copy that has unsynced local edits (#225 review).
         if classify_sync_status(skill, Some(managed)) == "project_newer" {
             return Err(AppError::invalid_input(

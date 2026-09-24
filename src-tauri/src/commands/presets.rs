@@ -12,12 +12,6 @@ use crate::core::{
     timing::should_log_first_or_slow,
 };
 
-fn refresh_tray_menu_best_effort(app: &tauri::AppHandle) {
-    if let Err(err) = crate::refresh_tray_menu(app) {
-        log::warn!("Failed to refresh tray menu after preset mutation: {err}");
-    }
-}
-
 #[derive(Debug, Serialize)]
 pub struct PresetDto {
     pub id: String,
@@ -87,7 +81,6 @@ pub async fn get_active_preset(
 
 #[tauri::command]
 pub async fn create_preset(
-    app: tauri::AppHandle,
     name: String,
     description: Option<String>,
     icon: Option<String>,
@@ -99,9 +92,6 @@ pub async fn create_preset(
             .map(|scenario| preset_dto(&store, scenario))
     })
     .await?;
-    if result.is_ok() {
-        refresh_tray_menu_best_effort(&app);
-    }
     result
 }
 
@@ -159,7 +149,6 @@ fn create_and_activate_preset_internal(
 
 #[tauri::command]
 pub async fn update_preset(
-    app: tauri::AppHandle,
     id: String,
     name: String,
     description: Option<String>,
@@ -171,9 +160,6 @@ pub async fn update_preset(
         update_preset_internal(&store, &id, &name, description.as_deref(), icon.as_deref())
     })
     .await?;
-    if result.is_ok() {
-        refresh_tray_menu_best_effort(&app);
-    }
     result
 }
 
@@ -200,7 +186,6 @@ pub fn update_preset_internal(
 
 #[tauri::command]
 pub async fn delete_preset(
-    app: tauri::AppHandle,
     id: String,
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<(), AppError> {
@@ -209,9 +194,6 @@ pub async fn delete_preset(
         delete_preset_internal(&store, &id)
     })
     .await?;
-    if result.is_ok() {
-        refresh_tray_menu_best_effort(&app);
-    }
     result
 }
 
@@ -235,7 +217,6 @@ pub fn delete_preset_internal(store: &SkillStore, id: &str) -> Result<(), AppErr
 
 #[tauri::command]
 pub async fn add_skill_to_preset(
-    app: tauri::AppHandle,
     skill_id: String,
     preset_id: String,
     store: State<'_, Arc<SkillStore>>,
@@ -250,15 +231,11 @@ pub async fn add_skill_to_preset(
         Ok(())
     })
     .await?;
-    if result.is_ok() {
-        refresh_tray_menu_best_effort(&app);
-    }
     result
 }
 
 #[tauri::command]
 pub async fn remove_skill_from_preset(
-    app: tauri::AppHandle,
     skill_id: String,
     preset_id: String,
     store: State<'_, Arc<SkillStore>>,
@@ -272,9 +249,6 @@ pub async fn remove_skill_from_preset(
         Ok(())
     })
     .await?;
-    if result.is_ok() {
-        refresh_tray_menu_best_effort(&app);
-    }
     result
 }
 
@@ -312,7 +286,6 @@ pub fn set_preset_skills_internal(
 
 #[tauri::command]
 pub async fn reorder_presets(
-    app: tauri::AppHandle,
     ids: Vec<String>,
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<(), AppError> {
@@ -325,9 +298,6 @@ pub async fn reorder_presets(
         .map_err(AppError::db)
     })
     .await?;
-    if result.is_ok() {
-        refresh_tray_menu_best_effort(&app);
-    }
     result
 }
 

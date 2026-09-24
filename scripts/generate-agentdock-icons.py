@@ -3,7 +3,7 @@
 
 The previous S mark is kept in the *-v1 files as a migration reference; all
 active icon paths are generated from this single source so the desktop bundle,
-web favicon, tray, and platform launchers stay visually consistent.
+web favicon, and platform launchers stay visually consistent.
 
 Requires Pillow (``python -m pip install Pillow``) when regenerating assets.
 """
@@ -157,15 +157,6 @@ def generate() -> None:
     _save_png(icon_dir / "StoreLogo.png", 50)
     _save_ico(icon_dir / "icon.ico")
     _save_icns(icon_dir / "icon.icns")
-
-    # Tray icons are monochrome so they remain legible against light and dark
-    # system trays. Preserve the pre-rename *-v1 files as historical backups.
-    for path in (icon_dir / "tray").glob("tray-icon*.png"):
-        if "-v1" in path.name:
-            continue
-        dimensions = _dimensions(path)
-        if dimensions:
-            _save_png(path, max(dimensions), monochrome="color" not in path.name)
 
     for path in (icon_dir / "ios").glob("*.png"):
         dimensions = _dimensions(path)

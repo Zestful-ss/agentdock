@@ -3,10 +3,8 @@
     "name": "AgentDock"
   },
   "sidebar": {
-    "dashboard": "Dashboard",
     "mySkills": "技能库",
     "installSkills": "安装 Skills",
-    "backup": "备份",
     "presets": "Preset",
     "newPreset": "新建 Preset",
     "projects": "项目工作区",
@@ -20,7 +18,7 @@
     "items": {
       "workflows": {
         "title": "推荐工作流",
-        "description": "将 Skills 安装到用户或项目的 .agents/skills 根目录。用 My Skills 整理，用 Inventory 观察 Harness Skills 和 MCP，用 Project 管理仓库级 Skills，并在 Settings 中配置 Git 备份和发现来源。"
+        "description": "将 Skills 安装到用户或项目的 .agents/skills 根目录。用 My Skills 整理，用 Inventory 观察 Harness Skills 和 MCP，用 Project 管理仓库级 Skills，并在 Settings 中配置发现来源和诊断。"
       },
       "presets": {
         "title": "Preset",
@@ -42,13 +40,9 @@
         "title": "项目工作区",
         "description": "关联项目后只管理 <repo>/.agents/skills，与用户技能库比较，并导入或导出项目 Skills。不会选择 per-agent 部署目标。"
       },
-      "backup": {
-        "title": "Git 备份",
-        "description": "从 Settings 或首次运行恢复对话框连接、恢复 Git 备份。连接同一仓库的设备可以同步技能库，冲突会显示出来供用户处理。"
-      },
       "settings": {
         "title": "设置",
-        "description": "配置发现路径与开关、外观、语言、代理、Git 备份、应用更新和诊断信息。旧的 sync_mode 设置仅保留在内部，AgentDock 不会写入 Harness。"
+        "description": "配置发现路径与开关、外观、语言、代理、自定义只读路径和诊断信息。AgentDock 不会写入 Harness 目录。"
       }
     }
   },
@@ -59,44 +53,11 @@
     "presets": "Preset",
     "projects": "项目",
     "actions": "操作",
-    "scanImport": "扫描 / 纳管本地技能",
     "hints": {
       "navigate": "选择",
       "open": "打开",
       "toggle": "呼出"
     }
-  },
-  "dashboard": {
-    "greeting": "你好！",
-    "summary": "Library 中 {{skills}} 个 Skills · 已接入 {{agents}} 个 Agent · {{projects}} 个 Project",
-    "librarySkills": "Library Skills",
-    "updatesAvailable": "可用更新",
-    "connectedAgents": "已接入 Agent",
-    "source": "来源",
-    "updateAvailable": "有可用更新",
-    "upToDate": "已是最新",
-    "scanImport": "扫描 / 纳管本地 Skills",
-    "installNew": "安装新 Skills",
-    "recentActivity": "近期动态"
-  },
-  "backup": {
-    "status": {
-      "loading": "正在检查备份状态",
-      "notConnected": "未连接",
-      "needsFix": "备份需要处理",
-      "pending": "有未备份的更改",
-      "synced": "已备份"
-    }
-  },
-  "firstRun": {
-    "title": "全新开始，还是从备份恢复？",
-    "subtitle": "你的技能库还是空的。如果你在其他设备上已有备份，粘贴备份仓库地址即可把所有技能同步过来。",
-    "urlLabel": "备份仓库地址",
-    "startFresh": "全新开始",
-    "restore": "连接并恢复",
-    "restoring": "正在恢复…",
-    "restoreSuccess": "备份已恢复，技能已就绪。",
-    "hint": "之后随时可以从「设置」或首次运行恢复对话框连接或恢复备份。"
   },
   "mySkills": {
     "title": "技能库",
@@ -116,12 +77,6 @@
     "noMatch": "没有符合当前搜索或筛选条件的 Skills",
     "clearFilters": "清除筛选",
     "currentPresetFallback": "当前 Preset",
-    "targetClickInstall": "点击安装",
-    "targetClickUninstall": "点击卸载",
-    "needsAttention": "需要处理",
-    "needsAttentionHint": "此技能存在同步冲突——打开「设置 → Git Sync Configuration」处理",
-    "updateNotification": "{{count}} 个 Skill 有可用更新",
-    "viewUpdates": "查看",
     "sourceType": "来源类型",
     "sourceRef": "来源位置",
     "sourceResolved": "解析后来源",
@@ -249,13 +204,7 @@
       "title": "安装本地 Skill",
       "description": "选择包含 `SKILL.md` 的文件夹，或安装 `.zip` / `.skill` 文件到用户 .agents 技能库。",
       "selectFolder": "选择文件夹",
-      "selectArchive": "选择压缩包或单文件",
-      "batchImport": "从文件夹全部安装",
-      "batchImporting": "正在扫描 Skill...",
-      "batchProgress": "正在安装 {{current}}/{{total}}: {{name}}...",
-      "batchSuccess": "已安装 {{imported}} 个 Skill，跳过 {{skipped}} 个已纳管的 Skill",
-      "batchAllSkipped": "全部 {{skipped}} 个 Skill 已经纳管",
-      "batchErrors": "{{count}} 个 Skill 安装失败"
+      "selectArchive": "选择压缩包或单文件"
     },
     "gitTitle": "从 Git 仓库安装",
     "gitDesc": "输入公共或私有 Git 仓库地址。私有仓库请确保本地已配置对应的 SSH 密钥。",
@@ -277,22 +226,6 @@
       "noProject": "请先关联一个项目工作区",
       "alreadyManaged": "已存在 —— 用替换覆盖",
       "replaceConflicts": "替换已存在项"
-    },
-    "scan": {
-      "title": "扫描并纳管本地 Skills",
-      "initial": "扫描现有工具目录。扫描是只读操作；纳管后才会复制到用户 .agents 技能库。",
-      "summary": "已扫描 {{tools}} 个工具目录，发现 {{skills}} 个可纳管的 Skills。",
-      "rescan": "重新扫描",
-      "scanning": "正在扫描本地 Skills...",
-      "importAll": "全部纳管",
-      "importOne": "纳管",
-      "imported": "已纳管",
-      "importedOne": "已纳管 {{name}}",
-      "importedAll": "已纳管全部发现的 Skills",
-      "rename": "重命名",
-      "noResults": "没有发现本地 Skills",
-      "noResultsHint": "当前目录可能已经全部纳管，或者相关 Agent 目录中还没有 Skills。",
-      "locations": "{{count}} 个来源位置"
     }
   },
   "settings": {
@@ -363,18 +296,6 @@
     "website": "官网",
     "version": "AgentDock 1.40.0",
     "tagline": "一个本地资源坞，统一管理 Agent Skills 与 MCP。",
-    "checkUpdate": "检查更新",
-    "checking": "检查中…",
-    "updateAvailable": "发现新版本 {{version}}！",
-    "noUpdate": "当前已是最新版本。",
-    "download": "下载",
-    "installUpdate": "安装更新",
-    "installing": "安装中…",
-    "restartToApply": "更新已安装，重启应用即可生效。",
-    "restartNow": "立即重启",
-    "viewUpdate": "查看",
-    "updateRelocate": "请先把 AgentDock 移到「应用程序」文件夹，并从那里启动，才能在应用内更新。",
-    "updateError": "自动更新失败，正在跳转下载页…",
     "reportIssue": "报告问题",
     "reportIssueHint": "复制应用 / 系统信息和最近日志摘要到剪贴板并打开新的 GitHub issue",
     "reportIssueExportHint": "如果问题复杂，请点击设置 → 关于中的「导出日志」按钮，把生成的 zip 拖到 issue 附件区。",
@@ -395,57 +316,12 @@
     "proxyUrlPlaceholder": "http://127.0.0.1:7890",
     "proxyUrlSaved": "代理设置已保存",
     "proxyUrlInvalid": "代理地址必须以 http://、https:// 或 socks5:// 开头",
-    "autoUpdate": {
-      "title": "Skill 自动更新",
-      "intervalLabel": "检查频率",
-      "intervalDesc": "后台按设定频率检查已安装 Skill 是否有上游更新。",
-      "intervalOff": "关闭",
-      "interval1h": "每小时",
-      "interval6h": "每 6 小时",
-      "interval24h": "每天",
-      "lastRun": "上次检查 {{time}}",
-      "applyLabel": "自动应用更新",
-      "applyDesc": "开启后自动拉取并覆盖本地内容；关闭则仅在技能库标记，需手动更新。",
-      "applyOff": "关闭（仅提示）",
-      "applyOn": "开启"
-    },
-    "gitSyncConfig": "Git 同步配置",
-    "gitSyncConfigDesc": "在这里配置 Git 备份仓库和同步行为。Harness 发现仍然是只读的。",
-    "gitConfigSaved": "Git 同步配置已保存",
-    "gitDisconnect": "断开备份",
-    "gitDisconnected": "已断开备份，本地技能与远端数据均保留。",
-    "gitDisconnectHint": "断开只清除本机的远程配置；本地技能和远端仓库数据都会保留。",
-    "gitEngineGit2": "内置 Git 引擎（实验性）",
-    "gitEngineGit2Desc": "HTTPS 备份的网络操作改用应用内置的 Git 引擎——不依赖系统 git，凭证从钥匙串内存注入。SSH 与自定义远端始终走系统 git。可随时关闭还原。",
-    "gitMergeEngineObject": "按技能合并同步",
-    "gitMergeEngineObjectDesc": "默认开启。同步时按技能对象而非文本行合并：重命名与内容修改自动组合；真正冲突的技能会保留本机版本并在设置中提示处理，而不是阻塞同步。关闭则回退到旧的按行 git 合并。",
-    "gitRemoteUrl": "远程仓库地址",
-    "gitRemoteUrlPlaceholder": "git@github.com:user/my-skills.git",
-    "gitErrorAuth": "认证失败，请检查 SSH Key 或访问令牌。",
-    "gitErrorNetwork": "网络连接失败，请检查网络和远程仓库地址。",
-    "gitErrorConflict": "本地与远程的改动发生冲突，请选择修复方式。",
-    "gitErrorNotRepo": "未检测到 Git 仓库，请先设置备份。",
-    "gitErrorRejected": "远程有新的更新，需要先合并后再同步。",
-    "gitErrorUnrelatedHistories": "本地仓库与远程仓库历史不一致。请打开「修复同步配置」选择处理方式。",
-    "gitErrorNoUpstream": "尚未建立远程跟踪关系。请打开「修复同步配置」处理。",
-    "gitErrorGeneric": "Git 操作失败，请检查设置中的远程仓库地址后重试。",
-    "closeAction": "关闭行为",
-    "closeActionDesc": "选择点击窗口关闭按钮后的应用行为。",
-    "closeAction_ask": "每次询问",
-    "closeAction_hide": "最小化到托盘",
-    "closeAction_close": "退出应用",
-    "trayIcon": "托盘图标",
-    "trayIconDesc": "在系统托盘中显示图标，便于快速执行显示和退出操作。",
-    "trayIcon_on": "显示",
-    "trayIcon_off": "隐藏",
-    "trayIconOffHint": "托盘图标已隐藏，关闭窗口时将直接退出应用。"
-  },
-  "closeAction": {
-    "title": "关闭行为",
-    "message": "最小化到托盘后，应用仍会在后台运行，你可以从系统托盘图标重新打开。",
-    "close": "退出应用",
-    "hide": "最小化到托盘",
-    "remember": "记住我的选择，下次不再提示"
+    "readOnlyPaths": "自定义只读路径",
+    "readOnlyPathsDesc": "额外观察的 Skill 根目录。AgentDock 不会写入这些路径；使用 Adopt 将资源复制到用户库或项目库。",
+    "readOnlyPathPlaceholder": "C:\\Tools\\shared-skills",
+    "addReadOnlyPath": "添加路径",
+    "removeReadOnlyPath": "移除路径",
+    "readOnlyPathAdded": "已添加只读路径"
   },
   "common": {
     "loading": "加载中...",

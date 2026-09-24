@@ -94,7 +94,7 @@ export function SkillProjectsSection({ skill, projects, onChanged }: Props) {
     const key = project.id;
     setPendingKey(key);
     try {
-      await api.exportSkillToProject(skill.id, project.id);
+      await api.copySkillToProject(skill.id, project.id);
       toast.success(
         t("addFromLibrary.toastAddedToProject", {
           skill: skill.name,

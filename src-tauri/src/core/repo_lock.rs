@@ -17,7 +17,7 @@ const LOCK_FILE_NAME: &str = ".skills-manager.lock";
 
 /// How long a user-initiated ("foreground") operation waits for the central
 /// repository lock before giving up with a "busy" error. Background work holds
-/// the lock only briefly per skill, but an auto-backup `git push` can hold it
+/// the lock only briefly per skill, but a long-running install or update can hold it
 /// for ~10–15s, so we wait comfortably longer than the longest expected
 /// background hold. Without this wait, a foreground install/update/tag/delete
 /// that happened to collide with a background update check or backup failed
@@ -25,8 +25,8 @@ const LOCK_FILE_NAME: &str = ".skills-manager.lock";
 pub const FOREGROUND_WAIT: Duration = Duration::from_secs(20);
 
 /// Poll cadence while waiting for the lock. Kept below the yield the background
-/// per-skill loops insert between releases (see `skill_auto_updater` and the
-/// tray check) so a waiting foreground op reliably wins the lock during that
+/// per-skill loops insert between releases so a waiting foreground operation
+/// reliably wins the lock during that
 /// window instead of being starved by the background re-acquiring immediately.
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
@@ -48,7 +48,7 @@ impl RepoLock {
     /// Acquire the lock, waiting up to `timeout` for a concurrent holder to
     /// release it before reporting the repository as busy. Used by
     /// user-initiated operations so transient contention with background work
-    /// (update checks, auto-backup) surfaces as a short wait, not an error.
+    /// (update checks and other repository operations) surfaces as a short wait, not an error.
     pub fn acquire_blocking(operation: &str, timeout: Duration) -> Result<Self> {
         let file = open_lock_file()?;
         let start = Instant::now();

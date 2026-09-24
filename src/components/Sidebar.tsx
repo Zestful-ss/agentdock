@@ -2,7 +2,6 @@ import { useState, useEffect, useRef } from "react";
 import { DragDropContext, Droppable, Draggable, type DropResult } from "@hello-pangea/dnd";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
-  LayoutDashboard,
   Layers,
   Download,
   Settings,
@@ -45,7 +44,7 @@ export function Sidebar() {
   const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
-  const { presets, viewedPreset, setViewedPresetId, refreshPresets, refreshManagedSkills, projects, refreshProjects, appUpdate } = useApp();
+  const { presets, viewedPreset, setViewedPresetId, refreshPresets, refreshManagedSkills, projects, refreshProjects } = useApp();
   const [showCreate, setShowCreate] = useState(false);
   const [showAddProject, setShowAddProject] = useState(false);
   const [renameTarget, setRenameTarget] = useState<{ id: string; name: string; icon?: string | null } | null>(null);
@@ -100,8 +99,8 @@ export function Sidebar() {
   };
 
   const NAV_ITEMS = [
-    { name: t("sidebar.dashboard"), path: "/", icon: LayoutDashboard },
-    { name: "Skills / MCP", path: "/inventory", icon: Layers },
+    { name: t("sidebar.mySkills"), path: "/my-skills", icon: Layers },
+    { name: "Skills / MCP", path: "/inventory", icon: FolderOpen },
     { name: t("sidebar.installSkills"), path: "/install", icon: Download },
   ];
 
@@ -481,14 +480,6 @@ export function Sidebar() {
               )}
             />
             {t("sidebar.settings")}
-            {/* A newer app version exists. Amber = "有更新" per the UI spec;
-                the dot only points at Settings, where the user decides. */}
-            {appUpdate?.has_update && (
-              <span
-                className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400"
-                title={t("settings.updateAvailable", { version: appUpdate.latest_version })}
-              />
-            )}
           </Link>
         </div>
       </div>
