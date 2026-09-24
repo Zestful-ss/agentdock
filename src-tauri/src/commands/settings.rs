@@ -1,17 +1,8 @@
-use semver::Version;
 use std::process::Command;
 use std::sync::Arc;
 use tauri::{Manager, State};
 
-use crate::core::{central_repo, error::AppError, log_sanitize, skill_store::SkillStore, skillssh_api};
-
-#[derive(serde::Serialize)]
-pub struct AppUpdateInfo {
-    pub has_update: bool,
-    pub current_version: String,
-    pub latest_version: String,
-    pub release_url: String,
-}
+use crate::core::{central_repo, error::AppError, log_sanitize, skill_store::SkillStore};
 
 #[tauri::command]
 pub async fn get_settings(
@@ -48,7 +39,6 @@ pub fn log_startup_event(label: String, elapsed_ms: u64) {
 
 #[tauri::command]
 pub async fn set_settings(
-    app: tauri::AppHandle,
     key: String,
     value: String,
     store: State<'_, Arc<SkillStore>>,
@@ -59,29 +49,10 @@ pub async fn set_settings(
     tauri::async_runtime::spawn_blocking(move || {
         store
             .set_setting(&key_for_store, &value_for_store)
-            .map_err(AppError::db)?;
-        if key_for_store == "show_tray_icon" {
-            let tray_enabled = matches!(
-                value_for_store.trim().to_ascii_lowercase().as_str(),
-                "true" | "1" | "yes" | "on"
-            );
-            if !tray_enabled {
-                store
-                    .set_setting("close_action", "close")
-                    .map_err(AppError::db)?;
-            }
-        }
-        Ok::<(), AppError>(())
+            .map_err(AppError::db)
     })
     .await??;
 
-    if key == "show_tray_icon" {
-        let enabled = matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "true" | "1" | "yes" | "on"
-        );
-        crate::set_tray_icon_enabled(&app, enabled).map_err(AppError::io)?;
-    }
     Ok(())
 }
 
@@ -145,44 +116,6 @@ pub async fn open_central_repo_folder() -> Result<(), AppError> {
 
         let _ = status;
         Ok(())
-    })
-    .await?
-}
-
-#[tauri::command]
-pub async fn check_app_update(
-    app: tauri::AppHandle,
-    store: State<'_, Arc<SkillStore>>,
-) -> Result<AppUpdateInfo, AppError> {
-    let current_version = app.config().version.clone().unwrap_or_default();
-    let proxy_url = store.proxy_url();
-    tauri::async_runtime::spawn_blocking(move || {
-        let client = skillssh_api::build_http_client(proxy_url.as_deref(), 15);
-
-        let resp: serde_json::Value = client
-            .get("https://api.github.com/repos/xingkongliang/skills-manager/releases/latest")
-            .send()
-            .map_err(|e| AppError::network(format!("Network error: {e}")))?
-            .json()
-            .map_err(|e| AppError::network(format!("Failed to parse response: {e}")))?;
-
-        let tag = resp["tag_name"]
-            .as_str()
-            .ok_or_else(|| AppError::network("No tag_name in response"))?;
-        let latest_version = tag.strip_prefix('v').unwrap_or(tag).to_string();
-        let release_url = resp["html_url"]
-            .as_str()
-            .unwrap_or("https://github.com/xingkongliang/skills-manager/releases")
-            .to_string();
-
-        let has_update = version_gt(&latest_version, &current_version);
-
-        Ok(AppUpdateInfo {
-            has_update,
-            current_version,
-            latest_version,
-            release_url,
-        })
     })
     .await?
 }
@@ -631,12 +564,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn collapses_repeated_tray_lines_old_format() {
+    fn collapses_repeated_log_lines_old_format() {
         let log = "\
-[2026-03-22][04:20:02][app_lib][INFO] Tray icon created
-[2026-03-22][04:21:02][app_lib][INFO] Tray icon created
-[2026-03-22][04:22:02][app_lib][INFO] Tray icon created
-[2026-03-22][04:23:02][app_lib][INFO] Tray icon created
+[2026-03-22][04:20:02][app_lib][INFO] Repeated event
+[2026-03-22][04:21:02][app_lib][INFO] Repeated event
+[2026-03-22][04:22:02][app_lib][INFO] Repeated event
+[2026-03-22][04:23:02][app_lib][INFO] Repeated event
 [2026-03-22][04:24:02][app_lib][INFO] Migrated legacy tool key X -> Y";
         let out = collapse_consecutive_repeats(log);
         assert!(out.contains("repeated 3 more times"), "got: {out}");
@@ -672,113 +605,4 @@ pub async fn app_exit(app: tauri::AppHandle) {
         log::error!("Failed to schedule app_exit on main thread: {err}");
         crate::quit_app(&app);
     }
-}
-
-/// Relaunch the app so a freshly installed update takes effect. Only ever
-/// invoked from an explicit user confirmation — the updater never restarts on
-/// its own.
-///
-/// Scheduled onto the main thread for the same reason `app_exit` is: the
-/// teardown destroys the main window before the process goes away.
-#[tauri::command]
-pub async fn restart_app(app: tauri::AppHandle) {
-    let app_for_main = app.clone();
-    if let Err(err) = app.run_on_main_thread(move || crate::restart_app(&app_for_main)) {
-        log::error!("Failed to schedule restart_app on main thread: {err}");
-        crate::restart_app(&app);
-    }
-}
-
-/// Report why an in-app update cannot be installed from where the app is
-/// running right now, or `None` to let the updater proceed.
-///
-/// Deliberately narrow. A general "is the bundle's parent writable" test would
-/// be wrong: a `/Applications` copy owned by a different admin account is not
-/// writable by this process either, and there the updater's own privileged
-/// prompt succeeds. Only the two states below are beyond its reach, because it
-/// replaces the `.app` in place.
-#[tauri::command]
-pub async fn update_install_blocker() -> Result<Option<String>, AppError> {
-    // macOS-specific: elsewhere the updater runs an installer from a temp
-    // directory instead of swapping the running bundle.
-    if !cfg!(target_os = "macos") {
-        return Ok(None);
-    }
-    tauri::async_runtime::spawn_blocking(|| {
-        let exe = std::env::current_exe().map_err(|e| AppError::io(e.to_string()))?;
-        // Gatekeeper runs a quarantined copy from a randomized read-only mount
-        // that is discarded on quit, so an update written there would vanish
-        // rather than apply.
-        if exe.components().any(|c| c.as_os_str() == "AppTranslocation") {
-            return Ok(Some("relocate".to_string()));
-        }
-        // …/Foo.app/Contents/MacOS/foo — the updater swaps the bundle inside
-        // its parent directory, so that is what has to accept a write.
-        let Some(parent) = exe.ancestors().nth(4) else {
-            return Ok(None);
-        };
-        match tempfile::Builder::new()
-            .prefix(".skills-manager-update-probe")
-            .tempfile_in(parent)
-        {
-            Ok(_) => Ok(None),
-            // EROFS: still running from a mounted .dmg or another read-only
-            // image, which no amount of privilege makes writable.
-            Err(e) if e.raw_os_error() == Some(30) => Ok(Some("relocate".to_string())),
-            // EACCES and friends: the updater escalates on its own, so let it.
-            Err(_) => Ok(None),
-        }
-    })
-    .await?
-}
-
-#[tauri::command]
-pub async fn hide_to_tray(
-    app: tauri::AppHandle,
-    window: tauri::WebviewWindow,
-    store: State<'_, Arc<SkillStore>>,
-) -> Result<(), AppError> {
-    let show_tray_icon = {
-        let store = store.inner().clone();
-        tauri::async_runtime::spawn_blocking(move || {
-            let value = store.get_setting("show_tray_icon").map_err(AppError::db)?;
-            Ok::<bool, AppError>(!matches!(
-                value.as_deref().map(str::trim).map(str::to_ascii_lowercase),
-                Some(v) if matches!(v.as_str(), "false" | "0" | "no" | "off")
-            ))
-        })
-        .await??
-    };
-
-    if !show_tray_icon {
-        crate::quit_app(&app);
-        return Ok(());
-    }
-
-    window.hide().map_err(|e| AppError::io(e.to_string()))?;
-    // On macOS, avoid app.hide() (app-level hidden state can block restore in tray flow).
-    // Keep app running and hide only the window + Dock icon.
-    #[cfg(target_os = "macos")]
-    {
-        app.set_dock_visibility(false)
-            .map_err(|e| AppError::io(format!("Failed to hide Dock icon on macOS: {e}")))?;
-        app.set_activation_policy(tauri::ActivationPolicy::Accessory)
-            .map_err(|e| {
-                AppError::io(format!("Failed to set activation policy to Accessory: {e}"))
-            })?;
-    }
-    #[cfg(not(target_os = "macos"))]
-    let _ = app;
-    Ok(())
-}
-
-fn version_gt(a: &str, b: &str) -> bool {
-    // Prefer strict SemVer comparison (supports pre-release/build metadata).
-    if let (Ok(a_ver), Ok(b_ver)) = (Version::parse(a), Version::parse(b)) {
-        return a_ver > b_ver;
-    }
-
-    // Fallback for non-SemVer tags.
-    let parse = |s: &str| -> Vec<u64> { s.split('.').filter_map(|p| p.parse().ok()).collect() };
-    parse(a) > parse(b)
 }

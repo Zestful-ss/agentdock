@@ -16,8 +16,32 @@ on:
 permissions:
   contents: write
 
+env:
+  # Keep release preparation pinned to the canonical AgentDock repository.
+  RELEASE_SOURCE_REPOSITORY: Zestful-ss/agentdock
+
 jobs:
+  validate-release-source:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    name: Validate release source
+    steps:
+      - name: Match the release source repository
+        env:
+          EXPECTED_REPOSITORY: ${{ env.RELEASE_SOURCE_REPOSITORY }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.repository }}" != "$EXPECTED_REPOSITORY" ]; then
+            echo "::error::This workflow is pinned to $EXPECTED_REPOSITORY, but the workflow was dispatched in ${{ github.repository }}. Update RELEASE_SOURCE_REPOSITORY before preparing a release from another repository."
+            exit 1
+          fi
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Prepare Release must be dispatched from main; refusing to push $GITHUB_REF directly into main."
+            exit 1
+          fi
+
   prepare-release:
+    needs: validate-release-source
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch'
     steps:
@@ -52,7 +76,7 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           # Keep the generated release set explicit. This workflow only
           # prepares the version commit/tag; the separate release.yml owns
-          # build, signing, notarization, updater metadata, and publication.
+          # build, signing, notarization, and publication.
           git add \
             CHANGELOG.md \
             CHANGELOG-zh.md \
@@ -63,7 +87,6 @@ jobs:
             src-tauri/Cargo.lock \
             src/i18n/en.json \
             src/i18n/zh.json \
-            src/i18n/zh-TW.json \
             assets/star-history.svg
           git diff --cached --check
           git commit -m "chore: bump version to ${VERSION}"

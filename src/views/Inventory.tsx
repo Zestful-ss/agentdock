@@ -4,12 +4,14 @@ import { Download, FolderInput, Pencil, RefreshCw, Trash2, X } from "lucide-reac
 import * as api from "../lib/tauri";
 import { useCurrentProject } from "../lib/useCurrentProject";
 import type {
+  AdoptDiff,
   CanonicalScope,
   McpInventoryRow,
   MigrationEntry,
   SkillInventoryRow,
 } from "../lib/tauri";
 import { getErrorKind, getErrorMessage } from "../lib/error";
+import { DocumentDiffViewer } from "../components/DocumentDiffViewer";
 
 function statusLabel(status: SkillInventoryRow["status"]): string {
   switch (status) {
@@ -55,6 +57,12 @@ export function Inventory() {
   } | null>(null);
   const [migration, setMigration] = useState<MigrationEntry[] | null>(null);
   const [migrating, setMigrating] = useState(false);
+  const [adoptDiff, setAdoptDiff] = useState<{
+    row: SkillInventoryRow;
+    target: "user" | "project";
+    diff: AdoptDiff;
+  } | null>(null);
+  const [visibility, setVisibility] = useState<"active" | "ignored" | "hidden" | "all">("active");
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -94,22 +102,62 @@ export function Inventory() {
     void refreshProject(currentProject?.id ?? null);
   }, [currentProject?.id, refreshProject]);
 
-  const managed = useMemo(() => skills.filter((row) => row.status === "managed"), [skills]);
-  const discovered = useMemo(
-    () => skills.filter((row) => row.status !== "managed"),
-    [skills],
-  );
-  const projectManaged = useMemo(
-    () => projectSkills.filter((row) => row.status === "managed"),
-    [projectSkills],
-  );
-  const projectDiscovered = useMemo(
-    () => projectSkills.filter((row) => row.status !== "managed"),
-    [projectSkills],
+  const matchesVisibility = useCallback(
+    (row: { ignored: boolean; hidden: boolean }) => {
+      if (visibility === "all") return true;
+      if (visibility === "ignored") return row.ignored;
+      if (visibility === "hidden") return row.hidden;
+      return !row.ignored && !row.hidden;
+    },
+    [visibility],
   );
 
+  const visibleSkills = useMemo(
+    () => skills.filter(matchesVisibility),
+    [matchesVisibility, skills],
+  );
+  const visibleProjectSkills = useMemo(
+    () => projectSkills.filter(matchesVisibility),
+    [matchesVisibility, projectSkills],
+  );
+  const visibleMcp = useMemo(
+    () => mcp.filter(matchesVisibility),
+    [matchesVisibility, mcp],
+  );
+
+  const managed = useMemo(
+    () => visibleSkills.filter((row) => row.status === "managed"),
+    [visibleSkills],
+  );
+  const discovered = useMemo(
+    () => visibleSkills.filter((row) => row.status !== "managed"),
+    [visibleSkills],
+  );
+  const projectManaged = useMemo(
+    () => visibleProjectSkills.filter((row) => row.status === "managed"),
+    [visibleProjectSkills],
+  );
+  const projectDiscovered = useMemo(
+    () => visibleProjectSkills.filter((row) => row.status !== "managed"),
+    [visibleProjectSkills],
+  );
+
+  const updateResourceState = async (
+    kind: "skill" | "mcp",
+    path: string,
+    state: Partial<api.InventoryResourceState>,
+  ) => {
+    try {
+      await api.setInventoryResourceState(kind, path, state);
+      await refresh();
+      await refreshProject(currentProject?.id ?? null);
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, "Failed to update resource state"));
+    }
+  };
+
   const adopt = async (row: SkillInventoryRow, target: "user" | "project", replace = false) => {
-    if (row.system || row.read_only) return;
+    if (row.system) return;
     if (target === "project" && !currentProject) {
       toast.error("Link a project workspace first");
       return;
@@ -127,19 +175,30 @@ export function Inventory() {
       await refreshProject(currentProject?.id ?? null);
     } catch (error: unknown) {
       if (!replace && getErrorKind(error) === "target_conflict") {
-        toast.error(`"${row.name}" is already managed`, {
-          action: {
-            label: "Replace",
-            onClick: () => void adopt(row, target, true),
-          },
-          duration: 8000,
-        });
+        try {
+          const diff = await api.getAdoptDiff(
+            row.path,
+            row.name,
+            target,
+            currentProject?.id ?? null,
+          );
+          setAdoptDiff({ row, target, diff });
+        } catch (diffError: unknown) {
+          toast.error(getErrorMessage(diffError, "Failed to compare the existing skill"));
+        }
       } else {
-        toast.error(getErrorMessage(error, "Import failed"));
+        toast.error(getErrorMessage(error, "Adopt failed"));
       }
     } finally {
       setBusyPath(null);
     }
+  };
+
+  const confirmAdoptReplace = async () => {
+    if (!adoptDiff) return;
+    const { row, target } = adoptDiff;
+    setAdoptDiff(null);
+    await adopt(row, target, true);
   };
 
   const remove = async (row: SkillInventoryRow, scope: CanonicalScope) => {
@@ -291,11 +350,12 @@ export function Inventory() {
             )}
           </div>
         )}
-        <div className="mt-4 flex gap-1 border-b border-border-subtle">
-          {[
-            { id: "skills" as const, label: "Skills · Managed" },
-            { id: "mcp" as const, label: "MCP · Discovered" },
-          ].map((tab) => (
+        <div className="mt-4 flex items-center justify-between gap-3 border-b border-border-subtle">
+          <div className="flex gap-1">
+            {[
+              { id: "skills" as const, label: "Skills · Managed" },
+              { id: "mcp" as const, label: "MCP · Discovered" },
+            ].map((tab) => (
             <button
               key={tab.id}
               onClick={() => setPanel(tab.id)}
@@ -308,8 +368,22 @@ export function Inventory() {
               {tab.label}
             </button>
           ))}
+          </div>
+          <label className="flex items-center gap-2 pr-1 text-xs text-muted">
+            <span>Show</span>
+            <select
+              value={visibility}
+              onChange={(e) => setVisibility(e.target.value as typeof visibility)}
+              className="rounded border border-border-subtle bg-surface px-1.5 py-1 text-xs text-secondary outline-none"
+            >
+              <option value="active">Visible</option>
+              <option value="ignored">Ignored</option>
+              <option value="hidden">Hidden</option>
+              <option value="all">All</option>
+            </select>
+          </label>
         </div>
-      </div>
+        </div>
 
       {loading ? (
         <p className="text-sm text-muted">Loading inventory…</p>
@@ -328,6 +402,12 @@ export function Inventory() {
                     busy={busyPath === row.path}
                     onEdit={() => void openEditor(row, "user")}
                     onDelete={() => void remove(row, "user")}
+                     onToggleIgnored={() => void updateResourceState("skill", row.path, { ignored: !row.ignored })}
+                     onToggleHidden={() => void updateResourceState("skill", row.path, { hidden: !row.hidden })}
+                     onEditNote={() => {
+                       const note = window.prompt("Resource note", row.note);
+                       if (note !== null) void updateResourceState("skill", row.path, { note });
+                     }}
                   />
                 ))}
               </div>
@@ -350,6 +430,12 @@ export function Inventory() {
                     busy={busyPath === row.path}
                     onEdit={() => void openEditor(row, "project")}
                     onDelete={() => void remove(row, "project")}
+                     onToggleIgnored={() => void updateResourceState("skill", row.path, { ignored: !row.ignored })}
+                     onToggleHidden={() => void updateResourceState("skill", row.path, { hidden: !row.hidden })}
+                     onEditNote={() => {
+                       const note = window.prompt("Resource note", row.note);
+                       if (note !== null) void updateResourceState("skill", row.path, { note });
+                     }}
                   />
                 ))}
               </div>
@@ -366,6 +452,12 @@ export function Inventory() {
                     busy={busyPath === row.path}
                     onAdoptUser={() => void adopt(row, "user")}
                     onAdoptProject={() => void adopt(row, "project")}
+                     onToggleIgnored={() => void updateResourceState("skill", row.path, { ignored: !row.ignored })}
+                     onToggleHidden={() => void updateResourceState("skill", row.path, { hidden: !row.hidden })}
+                     onEditNote={() => {
+                       const note = window.prompt("Resource note", row.note);
+                       if (note !== null) void updateResourceState("skill", row.path, { note });
+                     }}
                   />
                 ))}
               </div>
@@ -384,6 +476,12 @@ export function Inventory() {
                     busy={busyPath === row.path}
                     onAdoptUser={() => void adopt(row, "user")}
                     onAdoptProject={() => void adopt(row, "project")}
+                     onToggleIgnored={() => void updateResourceState("skill", row.path, { ignored: !row.ignored })}
+                     onToggleHidden={() => void updateResourceState("skill", row.path, { hidden: !row.hidden })}
+                     onEditNote={() => {
+                       const note = window.prompt("Resource note", row.note);
+                       if (note !== null) void updateResourceState("skill", row.path, { note });
+                     }}
                   />
                 ))}
               </div>
@@ -392,17 +490,19 @@ export function Inventory() {
         </div>
       ) : (
         <div className="flex flex-col gap-2">
-          {mcp.length === 0 ? (
+          {visibleMcp.length === 0 ? (
             <p className="text-sm text-muted">No MCP servers discovered.</p>
           ) : (
-            mcp.map((row) => (
-              <button
-                key={row.name}
-                onClick={() => setExpanded((cur) => (cur === row.name ? null : row.name))}
-                className="rounded-md border border-border-subtle bg-surface px-3 py-2 text-left hover:bg-surface-hover"
-              >
+            visibleMcp.map((row) => (
+              <div key={row.id} className="rounded-md border border-border-subtle bg-surface p-1">
+                <button
+                  onClick={() => setExpanded((cur) => (cur === row.id ? null : row.id))}
+                  className="w-full rounded-md px-3 py-2 text-left hover:bg-surface-hover"
+                >
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-medium text-primary">{row.name}</span>
+                  {row.ignored && <span className="ml-2 text-[11px] text-amber-600">Ignored</span>}
+                  {row.hidden && <span className="ml-2 text-[11px] text-slate-500">Hidden</span>}
                   <span className="text-[11px] uppercase text-muted">
                     {row.sources.filter((s) => s.configured).length} source(s)
                   </span>
@@ -416,7 +516,7 @@ export function Inventory() {
                       </span>
                     ))}
                 </div>
-                {expanded === row.name ? (
+                {expanded === row.id ? (
                   <div className="mt-2 space-y-1 text-xs text-secondary">
                     {row.sources
                       .filter((source) => source.configured)
@@ -427,12 +527,69 @@ export function Inventory() {
                           <div className="truncate text-tertiary">{source.source_path}</div>
                         </div>
                       ))}
+                    {row.note && <div className="italic text-muted">Note: {row.note}</div>}
                     <div className="text-muted">Read-only inventory. No enable/disable.</div>
                   </div>
                 ) : null}
               </button>
+                <div className="flex items-center justify-end gap-1 border-t border-border-subtle px-2 pt-1">
+                  <button
+                    onClick={() => void updateResourceState("mcp", row.id, { ignored: !row.ignored })}
+                    className="rounded border border-border px-2 py-1 text-[11px] text-secondary hover:bg-surface-hover"
+                  >
+                    {row.ignored ? "Show" : "Ignore"}
+                  </button>
+                  <button
+                    onClick={() => void updateResourceState("mcp", row.id, { hidden: !row.hidden })}
+                    className="rounded border border-border px-2 py-1 text-[11px] text-secondary hover:bg-surface-hover"
+                  >
+                    {row.hidden ? "Unhide" : "Hide"}
+                  </button>
+                </div>
+              </div>
             ))
           )}
+        </div>
+      )}
+
+      {adoptDiff && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="flex max-h-[85vh] w-full max-w-5xl flex-col rounded-lg border border-border bg-surface">
+            <div className="flex items-center justify-between border-b border-border-subtle px-4 py-2.5">
+              <div className="text-sm font-semibold text-primary">
+                Review Adopt replacement · {adoptDiff.row.name} · {adoptDiff.target}
+              </div>
+              <button
+                onClick={() => setAdoptDiff(null)}
+                className="rounded p-1 text-muted hover:bg-surface-hover hover:text-secondary"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-auto p-3">
+              <DocumentDiffViewer
+                original={adoptDiff.diff.original}
+                updated={adoptDiff.diff.updated}
+              />
+              <div className="mt-2 text-[11px] text-muted">
+                Existing: {adoptDiff.diff.target_path} · Source: {adoptDiff.diff.source_path}
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-border-subtle px-4 py-2.5">
+              <button
+                onClick={() => setAdoptDiff(null)}
+                className="rounded border border-border px-3 py-1.5 text-sm text-secondary hover:bg-surface-hover"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => void confirmAdoptReplace()}
+                className="rounded border border-accent-border bg-accent-dark px-3 py-1.5 text-sm text-white hover:bg-accent"
+              >
+                Replace
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -486,6 +643,9 @@ function SkillRow({
   onAdoptProject,
   onEdit,
   onDelete,
+  onToggleIgnored,
+  onToggleHidden,
+  onEditNote,
 }: {
   row: SkillInventoryRow;
   busy?: boolean;
@@ -493,6 +653,9 @@ function SkillRow({
   onAdoptProject?: () => void;
   onEdit?: () => void;
   onDelete?: () => void;
+  onToggleIgnored?: () => void;
+  onToggleHidden?: () => void;
+  onEditNote?: () => void;
 }) {
   return (
     <div className="rounded-md border border-border-subtle bg-surface px-3 py-2">
@@ -503,9 +666,19 @@ function SkillRow({
             <span className="rounded bg-bg-secondary px-1.5 py-0.5 text-[11px] text-muted">
               {statusLabel(row.status)}
             </span>
+            <span className="rounded bg-bg-secondary px-1.5 py-0.5 text-[11px] text-muted">
+              {row.source_kind} · {row.ownership}
+            </span>
             <span className="text-[11px] text-muted">{row.source_display_name}</span>
+             {row.ignored && (
+               <span className="rounded bg-amber-500/12 px-1.5 py-0.5 text-[11px] text-amber-600 dark:text-amber-400">Ignored</span>
+             )}
+             {row.hidden && (
+               <span className="rounded bg-slate-500/12 px-1.5 py-0.5 text-[11px] text-slate-500">Hidden</span>
+             )}
           </div>
           <div className="truncate text-xs text-tertiary">{row.path}</div>
+           {row.note && <div className="mt-1 text-[11px] italic text-muted">Note: {row.note}</div>}
           {row.native_consumers.length > 0 ? (
             <div className="mt-1 text-[11px] text-muted">
               Native consumers: {row.native_consumers.join(", ")}
@@ -535,7 +708,34 @@ function SkillRow({
               </button>
             </>
           )}
-          {onEdit && (
+          {onToggleIgnored && (
+             <button
+               disabled={busy}
+               onClick={onToggleIgnored}
+               className="rounded border border-border px-2 py-1 text-xs text-secondary hover:bg-surface-hover disabled:opacity-50"
+             >
+               {row.ignored ? "Show" : "Ignore"}
+             </button>
+           )}
+           {onToggleHidden && (
+             <button
+               disabled={busy}
+               onClick={onToggleHidden}
+               className="rounded border border-border px-2 py-1 text-xs text-secondary hover:bg-surface-hover disabled:opacity-50"
+             >
+               {row.hidden ? "Unhide" : "Hide"}
+             </button>
+           )}
+           {onEditNote && (
+             <button
+               disabled={busy}
+               onClick={onEditNote}
+               className="rounded border border-border px-2 py-1 text-xs text-secondary hover:bg-surface-hover disabled:opacity-50"
+             >
+               Note
+             </button>
+           )}
+           {onEdit && (
             <button
               disabled={busy}
               onClick={onEdit}

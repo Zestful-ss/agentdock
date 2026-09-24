@@ -1,6 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "skills-manager",
+  "productName": "AgentDock",
+  "mainBinaryName": "skills-manager",
   "version": "1.40.0",
   "identifier": "com.agentskills.desktop",
   "build": {
@@ -12,7 +13,7 @@
   "app": {
     "windows": [
       {
-        "title": "Skills Manager",
+        "title": "AgentDock",
         "width": 1440,
         "height": 860,
         "minWidth": 1100,
@@ -28,17 +29,10 @@
       "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: https://asset.localhost data: blob: https:; font-src 'self' data:; connect-src ipc: http://ipc.localhost https:"
     }
   },
-  "plugins": {
-    "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IERBRUYwMTBDOEQ3MDdEODAKUldTQWZYQ05EQUh2Mm0wNDZtNm5VYWJpbjRaZVJQRUhrQ2tkOXc3MHBWZ2VaREo0OVd3WEU3d0oK",
-      "endpoints": [
-        "https://github.com/xingkongliang/skills-manager/releases/latest/download/latest.json"
-      ]
-    }
-  },
+  "plugins": {},
   "bundle": {
     "active": true,
-    "createUpdaterArtifacts": true,
+    "publisher": "agentskills",
     "targets": "all",
     "icon": [
       "icons/32x32.png",
@@ -47,7 +41,27 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "windows": {
+      "wix": {
+        "upgradeCode": "08c191c4-bdbb-5964-9f50-bc2b2edafd1a"
+      },
+      "nsis": {
+        "startMenuFolder": "skills-manager",
+        "installerHooks": "windows/agentdock-migration.nsh"
+      }
+    },
+    "linux": {
+      "deb": {
+        "conflicts": ["skills-manager"],
+        "replaces": ["skills-manager"]
+      },
+      "rpm": {
+        "conflicts": ["skills-manager"],
+        "obsoletes": ["skills-manager"]
+      }
+    },
     "macOS": {
+      "bundleName": "skills-manager",
       "minimumSystemVersion": "10.15"
     }
   }

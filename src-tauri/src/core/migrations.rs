@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use rusqlite::Connection;
 
 /// Current schema version. Bump this when adding a new migration.
-const LATEST_VERSION: u32 = 8;
+const LATEST_VERSION: u32 = 10;
 
 /// Run all pending migrations on the database.
 ///
@@ -55,6 +55,8 @@ fn migrate_step(conn: &Connection, from_version: u32) -> Result<()> {
         5 => migrate_v5_to_v6(conn),
         6 => migrate_v6_to_v7(conn),
         7 => migrate_v7_to_v8(conn),
+        8 => migrate_v8_to_v9(conn),
+        9 => migrate_v9_to_v10(conn),
         _ => bail!("unknown migration version: {from_version}"),
     }
 }
@@ -321,6 +323,52 @@ fn migrate_v7_to_v8(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// v8 → v9: remove state owned by the retired remote-sync/updater/tray
+/// surfaces. Skills, tags, Presets, projects, and the canonical paths remain
+/// untouched; only stale preferences and the merge projection are removed.
+fn migrate_v8_to_v9(conn: &Connection) -> Result<()> {
+    let has_settings: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'settings')",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_settings {
+        conn.execute_batch(
+            "DELETE FROM settings WHERE key IN (
+                'git_backup_remote_url',
+                'git_backup_engine',
+                'github_auth_method',
+                'backup_device_name',
+                'backup_auto_enabled',
+                'backup_last_auto_error',
+                'merge_engine',
+                'auto_update_check_interval',
+                'auto_update_apply',
+                'auto_update_last_run_at',
+                'close_action',
+                'show_tray_icon'
+            );",
+        )?;
+    }
+    conn.execute_batch("DROP TABLE IF EXISTS pending_conflicts;")?;
+    Ok(())
+}
+
+/// v9 → v10: remove deployment-era projections and linked workspace rows.
+/// The canonical Skill, tag, Preset, project, and audit tables remain intact.
+fn migrate_v9_to_v10(conn: &Connection) -> Result<()> {
+    if table_exists(conn, "skill_targets")? {
+        conn.execute("DELETE FROM skill_targets", [])?;
+    }
+    if table_exists(conn, "scenario_skill_tools")? {
+        conn.execute("DELETE FROM scenario_skill_tools", [])?;
+    }
+    if table_exists(conn, "projects")? && has_column(conn, "projects", "workspace_type")? {
+        conn.execute("DELETE FROM projects WHERE workspace_type = 'linked'", [])?;
+    }
+    Ok(())
+}
+
 // ── Helpers ──
 
 fn add_column_if_missing(
@@ -347,6 +395,15 @@ fn validate_identifier(name: &str) -> Result<()> {
         anyhow::bail!("Invalid SQL identifier: {}", name);
     }
     Ok(())
+}
+
+fn table_exists(conn: &Connection, table: &str) -> Result<bool> {
+    let result = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+        rusqlite::params![table],
+        |row| row.get(0),
+    )?;
+    Ok(result)
 }
 
 fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
@@ -566,6 +623,61 @@ mod tests {
             |r| r.get(0),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn v10_clears_retired_deployment_state_and_linked_projects() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        run_migrations(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO skills
+                (id, name, source_type, central_path, enabled, created_at, updated_at, status)
+             VALUES ('skill-1', 'Skill', 'local', '/skills/skill-1', 1, 1, 1, 'ok')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO scenarios (id, name, sort_order, created_at, updated_at)
+             VALUES ('preset-1', 'Preset', 0, 1, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO skill_targets
+                (id, skill_id, tool, target_path, mode, status)
+             VALUES ('target-1', 'skill-1', 'claude_code', '/harness/skill', 'copy', 'ok')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO scenario_skill_tools
+                (scenario_id, skill_id, tool, enabled, updated_at)
+             VALUES ('preset-1', 'skill-1', 'claude_code', 1, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO projects
+                (id, name, path, workspace_type, sort_order, created_at, updated_at)
+             VALUES ('linked-1', 'Legacy linked', '/legacy', 'linked', 0, 1, 1)",
+            [],
+        )
+        .unwrap();
+
+        conn.pragma_update(None, "user_version", 9).unwrap();
+        run_migrations(&conn).unwrap();
+
+        assert_eq!(count_rows(&conn, "skill_targets"), 0);
+        assert_eq!(count_rows(&conn, "scenario_skill_tools"), 0);
+        assert_eq!(count_rows(&conn, "projects"), 0);
+        assert_eq!(count_rows(&conn, "skills"), 1);
+        assert_eq!(count_rows(&conn, "scenarios"), 1);
+    }
+
+    fn count_rows(conn: &Connection, table: &str) -> i64 {
+        conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0))
+            .unwrap()
     }
 
     #[test]

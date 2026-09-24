@@ -36,19 +36,8 @@ export interface ManagedSkill {
   created_at: number;
   updated_at: number;
   status: string;
-  targets: SkillTarget[];
   preset_ids: string[];
   tags: string[];
-}
-
-export interface SkillTarget {
-  id: string;
-  skill_id: string;
-  tool: string;
-  target_path: string;
-  mode: string;
-  status: string;
-  synced_at: number | null;
 }
 
 export interface SkillDocument {
@@ -99,20 +88,6 @@ export interface Preset {
   skill_count: number;
   created_at: number;
   updated_at: number;
-}
-
-export interface DiscoveredGroup {
-  name: string;
-  fingerprint: string | null;
-  locations: { id: string; tool: string; found_path: string }[];
-  imported: boolean;
-  found_at: number;
-}
-
-export interface ScanResult {
-  tools_scanned: number;
-  skills_found: number;
-  groups: DiscoveredGroup[];
 }
 
 export interface SyncHealth {
@@ -380,15 +355,6 @@ export const relinkLocalSkillSource = (
 export const detachLocalSkillSource = (skillId: string) =>
   invoke<ManagedSkill>("detach_local_skill_source", { skillId });
 
-export interface BatchImportResult {
-  imported: number;
-  skipped: number;
-  errors: string[];
-}
-
-export const batchImportFolder = (folderPath: string) =>
-  invoke<BatchImportResult>("batch_import_folder", { folderPath });
-
 export const getAllTags = () => invoke<string[]>("get_all_tags");
 
 export const setSkillTags = (skillId: string, tags: string[]) =>
@@ -399,16 +365,6 @@ export const renameTag = (oldName: string, newName: string) =>
 
 export const deleteTag = (name: string) =>
   invoke<void>("delete_tag", { name });
-
-// ── Scan ──
-
-export const scanLocalSkills = () => invoke<ScanResult>("scan_local_skills");
-
-export const importExistingSkill = (sourcePath: string, name?: string) =>
-  invoke<void>("import_existing_skill", { sourcePath, name: name || null });
-
-export const importAllDiscovered = () =>
-  invoke<void>("import_all_discovered");
 
 // ── Settings ──
 
@@ -432,26 +388,8 @@ export const setCentralRepoPath = (path?: string | null) =>
 
 export const appExit = () => invoke<void>("app_exit");
 
-export const hideToTray = () => invoke<void>("hide_to_tray");
-
 export const openCentralRepoFolder = () =>
   invoke<void>("open_central_repo_folder");
-
-export interface AppUpdateInfo {
-  has_update: boolean;
-  current_version: string;
-  latest_version: string;
-  release_url: string;
-}
-
-export const checkAppUpdate = () =>
-  invoke<AppUpdateInfo>("check_app_update");
-
-/** Non-null when the app runs from somewhere an in-app update cannot be applied. */
-export const updateInstallBlocker = () =>
-  invoke<string | null>("update_install_blocker");
-
-export const restartApp = () => invoke<void>("restart_app");
 
 export interface DiagnosticInfo {
   app_version: string;
@@ -502,191 +440,6 @@ export const clearLastPanic = () =>
  */
 export const logStartupEvent = (label: string, elapsedMs: number) =>
   invoke<void>("log_startup_event", { label, elapsedMs: Math.round(elapsedMs) });
-
-// ── Git Backup ──
-
-export type GitUpstreamHealth =
-  | "healthy"
-  | "no_remote"
-  | "no_upstream"
-  | "unrelated_histories"
-  | "detached";
-
-export interface GitBackupStatus {
-  is_repo: boolean;
-  remote_url: string | null;
-  branch: string | null;
-  has_changes: boolean;
-  changed_skill_count: number;
-  ahead: number;
-  behind: number;
-  last_commit: string | null;
-  last_commit_time: string | null;
-  current_snapshot_tag: string | null;
-  restored_from_tag: string | null;
-  upstream_health: GitUpstreamHealth;
-}
-
-export interface GitBackupVersion {
-  tag: string;
-  commit: string;
-  message: string;
-  committed_at: string;
-  /** Device name of the machine that made this backup (empty for old commits). */
-  author: string;
-}
-
-export interface GitBackupSizeReport {
-  total_bytes: number;
-  /** `excluded`: oversized and kept out of the backup (§3.6); false = already tracked, warning only. */
-  oversized: { name: string; bytes: number; excluded: boolean }[];
-  skill_limit_bytes: number;
-  repo_warn_bytes: number;
-}
-
-export const gitBackupStatus = () =>
-  invoke<GitBackupStatus>("git_backup_status");
-
-export const gitBackupFetch = () => invoke<void>("git_backup_fetch");
-
-export const gitBackupInit = () => invoke<void>("git_backup_init");
-
-/** Returns the sanitized URL actually configured (credentials moved to the OS keychain). */
-export const gitBackupSetRemote = (url: string) =>
-  invoke<string>("git_backup_set_remote", { url });
-
-/** Strip embedded credentials into the OS keychain; returns the URL safe to persist. */
-export const gitBackupSanitizeRemoteUrl = (url: string) =>
-  invoke<string>("git_backup_sanitize_remote_url", { url });
-
-export interface GithubBackupConnectResult {
-  url: string;
-  login: string;
-  repo_created: boolean;
-  /** False when a pre-existing PUBLIC repository was connected. */
-  repo_private: boolean;
-  remote_has_content: boolean;
-}
-
-/** GitHub guided connect (PAT): validates the token, finds or creates the
- * private backup repo, stores the token in the OS keychain, saves the URL. */
-export const githubBackupConnect = (token: string, repoName: string) =>
-  invoke<GithubBackupConnectResult>("github_backup_connect", { token, repoName });
-
-export interface GithubDeviceFlowStart {
-  device_code: string;
-  user_code: string;
-  verification_uri: string;
-  expires_in: number;
-  interval: number;
-}
-
-export interface GithubDevicePollResult {
-  status: "pending" | "slow_down" | "connected";
-  result: GithubBackupConnectResult | null;
-}
-
-export const githubDeviceFlowStart = () =>
-  invoke<GithubDeviceFlowStart>("github_device_flow_start");
-
-/** One poll; on authorization the backend completes the whole connect and the
- * OAuth token never reaches the webview. */
-export const githubDeviceFlowPoll = (deviceCode: string, repoName: string) =>
-  invoke<GithubDevicePollResult>("github_device_flow_poll", { deviceCode, repoName });
-
-/** Migrate token-in-URL remotes to the OS keychain. Returns the sanitized URL if migrated. */
-export const gitBackupMigrateCredentials = () =>
-  invoke<string | null>("git_backup_migrate_credentials");
-
-export const gitBackupSizeReport = () =>
-  invoke<GitBackupSizeReport>("git_backup_size_report");
-
-/** This machine's device name (§4.3): saved setting or persisted hostname default. */
-export const backupDeviceName = () => invoke<string>("backup_device_name");
-
-/** Rename this device; only affects future backups. Returns the sanitized name. */
-export const backupSetDeviceName = (name: string) =>
-  invoke<string>("backup_set_device_name", { name });
-
-export const gitBackupRemoveRemote = () =>
-  invoke<void>("git_backup_remove_remote");
-
-export const gitBackupCommit = (message: string) =>
-  invoke<void>("git_backup_commit", { message });
-
-export const gitBackupPush = () => invoke<void>("git_backup_push");
-
-export interface MergeUpdatedSkill {
-  skill_id: string;
-  path: string;
-  /** Device (commit author) that last touched this skill on the remote. */
-  from_device: string;
-}
-
-/** Outcome of a sync merge (merge-engine design §8). With the default
- * system engine only `engine` is meaningful. */
-export interface MergeSummary {
-  engine: "object" | "system";
-  up_to_date: boolean;
-  fast_forward: boolean;
-  updated: MergeUpdatedSkill[];
-  kept_local: string[];
-  new_conflicts: string[];
-  pending_total: number;
-  old_client_warning: string | null;
-  legacy_fallback: boolean;
-}
-
-export const gitBackupPull = () => invoke<MergeSummary>("git_backup_pull");
-
-/** Outcome of the one-transaction sync (commit → merge → snapshot → push,
- * with automatic retry when another device pushes concurrently). */
-export interface SyncOutcome {
-  committed: boolean;
-  merge: MergeSummary | null;
-  pushed: boolean;
-  snapshot_tag: string | null;
-}
-
-export const gitBackupSync = (message: string) =>
-  invoke<SyncOutcome>("git_backup_sync", { message });
-
-/** One "needs attention" sync conflict (merge-engine design §4). */
-export interface PendingConflict {
-  skill_id: string;
-  theirs_commit: string;
-  theirs_path: string | null;
-  detected_at: number;
-}
-
-export const gitBackupPendingConflicts = () =>
-  invoke<PendingConflict[]>("git_backup_pending_conflicts");
-
-export type ResolveConflictAction = "keep_local" | "use_remote" | "keep_both";
-
-/** Resolve a pending conflict; returns the safety snapshot tag. */
-export const gitBackupResolveConflict = (
-  skillId: string,
-  action: ResolveConflictAction,
-) => invoke<string>("git_backup_resolve_conflict", { skillId, action });
-
-export const gitBackupClone = (url: string) =>
-  invoke<void>("git_backup_clone", { url });
-
-export const gitBackupReclone = (url: string) =>
-  invoke<void>("git_backup_reclone", { url });
-
-export const gitBackupCreateSnapshot = () =>
-  invoke<string>("git_backup_create_snapshot");
-
-export const gitBackupListVersions = (limit?: number) =>
-  invoke<GitBackupVersion[]>("git_backup_list_versions", {
-    limit: typeof limit === "number" ? limit : null,
-  });
-
-/** Returns the safety-point tag that captured the pre-restore state. */
-export const gitBackupRestoreVersion = (tag: string) =>
-  invoke<string>("git_backup_restore_version", { tag });
 
 // ── Presets ──
 
@@ -758,8 +511,8 @@ export const getProjectSkillDocument = (projectId: string, skillRelativePath: st
 export const importProjectSkillToCenter = (projectId: string, skillRelativePath: string) =>
   invoke<void>("import_project_skill_to_center", { projectId, skillRelativePath });
 
-export const exportSkillToProject = (skillId: string, projectId: string) =>
-  invoke<void>("export_skill_to_project", { skillId, projectId });
+export const copySkillToProject = (skillId: string, projectId: string) =>
+  invoke<void>("copy_skill_to_project", { skillId, projectId });
 
 export const updateProjectSkillToCenter = (projectId: string, skillRelativePath: string) =>
   invoke<void>("update_project_skill_to_center", { projectId, skillRelativePath });
@@ -772,20 +525,6 @@ export const deleteProjectSkill = (projectId: string, skillRelativePath: string)
 
 export const slugifySkillNames = (names: string[]) =>
   invoke<string[]>("slugify_skill_names", { names });
-
-// ── Agent Local Workspace ──
-
-export const getGlobalLocalSkills = (agent: string) =>
-  invoke<ProjectSkill[]>("get_global_local_skills", { agent });
-
-export const getGlobalLocalSkillDocument = (agent: string, skillRelativePath: string) =>
-  invoke<ProjectSkillDocument>("get_global_local_skill_document", { agent, skillRelativePath });
-
-export const importGlobalLocalSkillToCenter = (agent: string, skillRelativePath: string) =>
-  invoke<void>("import_global_local_skill_to_center", { agent, skillRelativePath });
-
-export const deleteGlobalLocalSkill = (agent: string, skillRelativePath: string) =>
-  invoke<void>("delete_global_local_skill", { agent, skillRelativePath });
 
 // ── V1 Inventory ──
 
@@ -800,6 +539,10 @@ export type SkillLifecycle =
 export interface SkillInventoryRow {
   name: string;
   status: SkillLifecycle;
+  /** canonical, harness, or custom. */
+  source_kind: "canonical" | "harness" | "custom";
+  /** agentdock, external, or system. */
+  ownership: "agentdock" | "external" | "system";
   path: string;
   source_harness: string;
   source_display_name: string;
@@ -808,6 +551,9 @@ export interface SkillInventoryRow {
   system: boolean;
   read_only: boolean;
   native_consumers: string[];
+  ignored: boolean;
+  hidden: boolean;
+  note: string;
 }
 
 export type McpTransport = "stdio" | "streamable_http" | "legacy_sse" | "unknown";
@@ -823,14 +569,28 @@ export interface McpHarnessStatus {
   configured: boolean;
 }
 
-/**
- * One MCP server name across harnesses. V1 carries no command/args/url/env/
- * headers/raw_config to the WebView on purpose (inventory, not debugger;
- * those fields routinely contain secrets).
- */
+/** One observed MCP resource. Duplicate names from different Harnesses remain
+ * separate rows so their source configs are never merged. */
 export interface McpInventoryRow {
+  id: string;
   name: string;
   sources: McpHarnessStatus[];
+  ignored: boolean;
+  hidden: boolean;
+  note: string;
+}
+
+export interface InventoryResourceState {
+  ignored: boolean;
+  hidden: boolean;
+  note: string;
+}
+
+export interface AdoptDiff {
+  original: string;
+  updated: string;
+  source_path: string;
+  target_path: string;
 }
 
 export interface CanonicalRoots {
@@ -860,11 +620,43 @@ export interface MigrationEntry {
 export const getSkillInventory = () =>
   invoke<SkillInventoryRow[]>("get_skill_inventory");
 
+export const getCustomReadOnlyPaths = () =>
+  invoke<string[]>("get_custom_read_only_paths");
+
+export const setCustomReadOnlyPaths = (paths: string[]) =>
+  invoke<string[]>("set_custom_read_only_paths", { paths });
+
 export const getProjectSkillInventory = (projectId: string) =>
   invoke<SkillInventoryRow[]>("get_project_skill_inventory", { projectId });
 
 export const getMcpInventory = () =>
   invoke<McpInventoryRow[]>("get_mcp_inventory");
+
+export const setInventoryResourceState = (
+  resourceKind: "skill" | "mcp",
+  identity: string,
+  state: Partial<InventoryResourceState>,
+) =>
+  invoke<InventoryResourceState>("set_inventory_resource_state", {
+    resourceKind,
+    identity,
+    ignored: state.ignored ?? null,
+    hidden: state.hidden ?? null,
+    note: state.note ?? null,
+  });
+
+export const getAdoptDiff = (
+  sourcePath: string,
+  skillName: string,
+  scope: CanonicalScope,
+  projectId: string | null,
+) =>
+  invoke<AdoptDiff>("get_adopt_diff", {
+    sourcePath,
+    skillName,
+    scope,
+    projectId,
+  });
 
 export const adoptSkillToUser = (sourcePath: string, replace?: boolean) =>
   invoke<string>("adopt_skill_to_user", { sourcePath, replace: replace ?? null });

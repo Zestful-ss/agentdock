@@ -2,14 +2,18 @@
   <img src="assets/icon.png" width="80" />
 </p>
 
-<h1 align="center">Skills Manager</h1>
+<h1 align="center">AgentDock</h1>
 
 <p align="center">
-  Manage <code>.agents</code>; observe Harnesses.
+  Manage Agent skills and MCP; observe Harnesses.
 </p>
 
 <p align="center">
   <strong><a href="https://skillsmanager.dev">skillsmanager.dev</a></strong>
+</p>
+
+<p align="center">
+  <small>Compatibility: existing metadata stays under <code>~/.skills-manager</code>; the historical <code>skills-manager-cli</code> executable remains available as an alias during the transition. The GitHub release source is now <code>Zestful-ss/agentdock</code>; the website and Homebrew cask must be updated as part of the external release gate.</small>
 </p>
 
 <p align="center">
@@ -31,67 +35,38 @@
 </p>
 
 <p align="center">
-  <a href="https://skills.sh/xingkongliang/skills-manager"><img src="https://skills.sh/b/xingkongliang/skills-manager" alt="manage-skills on skills.sh" /></a>
+  <a href="https://skills.sh/Zestful-ss/agentdock"><img src="https://skills.sh/b/Zestful-ss/agentdock" alt="manage-skills on skills.sh" /></a>
 </p>
 
-<p align="center">
-  <img src="assets/demo/library.png" width="800" alt="Skills Manager Library" />
-</p>
-
-<p align="center"><strong>Install Skills</strong></p>
-<p align="center"><img src="assets/demo/install-skills.png" width="800" alt="Install Skills" /></p>
-
-<p align="center"><strong>My Skills (curation)</strong></p>
-<p align="center"><img src="assets/demo/library.png" width="800" alt="My Skills library" /></p>
-
-<p align="center"><strong>Inventory (harness observation)</strong></p>
-<p align="center"><img src="assets/demo/global-workspace.png" width="800" alt="Inventory" /></p>
-
-<p align="center"><strong>Project Workspace</strong></p>
-<p align="center"><img src="assets/demo/project-workspace.png" width="800" alt="Project workspace" /></p>
-
-<p align="center"><strong>Settings</strong></p>
-<p align="center"><img src="assets/demo/settings.png" width="800" alt="Settings" /></p>
+> The current V1.1 screenshots are being recaptured; the behavior documented below is authoritative.
 
 ## Features
 
-<p align="center">
-  <img src="assets/diagram-concept-map.png" width="640" alt="Concept map: Library, Preset, My Skills, Inventory, Project" />
-</p>
-
-- **Manage `.agents`; observe Harnesses** — Skills install only into the canonical roots (`~/.agents/skills`, `<repo>/.agents/skills`). Harnesses (Claude Code, Codex, Cursor, …) are discovery sources shown under **Inventory**; the app does not deploy into harness-specific folders.
+- **Manage Agent skills and MCP; observe Harnesses** — Skills install only into the canonical roots (`~/.agents/skills`, `<repo>/.agents/skills`). Harnesses (Claude Code, Codex, Cursor, …) are discovery sources shown under **Inventory**; the app does not deploy into harness-specific folders.
 - **Unified skill library** — Install skills from Git repos, local folders, or `.zip` / `.skill` archives into the canonical library. Metadata (SQLite, cache, logs) stays under `~/.skills-manager`.
 - **My Skills** — Browse and curate the library; organize **presets** (curation groups) with membership toggles and ordering. Preset membership does not write harness files.
 - **Inventory** — Read-only view of what each harness already discovers (skills + MCP), including native `.agents` consumers.
-- **Project workspaces** — Manage project-local skills under `<repo>/.agents/skills`, compare with the user library, and import/export in either direction.
-- **Add from Library sheet** — Open **+ Add Skills** to search the library and batch-add skills.
-- **Batch operations** — Multi-select skills for bulk enable/disable, export, or delete where the surface still allows it.
+- **Project workspaces** — Manage project-local skills under `<repo>/.agents/skills` and compare them with the user library.
+- **Add from Library sheet** — Open **+ Add Skills** to search the library and batch-add skills to a project.
+- **Batch operations** — Multi-select skills for bulk enable/disable, update, or delete where the surface allows it.
 - **Skill tagging and filters** — Tag skills, group by source or tag, and find untagged ones quickly.
-- **Update tracking** — Check for upstream updates on Git-based skills; re-import local ones.
+- **Manual update tracking** — Check for upstream updates on Git-based skills; re-import local ones. Updates are never applied automatically.
 - **Skill preview and source inspection** — Read `SKILL.md` / `README.md`, inspect source metadata, and compare local content with the upstream version inside the app.
-- **Custom tools** — Register custom agents/tools for discovery paths, or override a built-in path for observation.
-- **Backup commands (Settings / first-run)** — Git remote helpers remain for multi-device sync of the library; there is no sidebar Backup page in this cut.
+- **Custom read-only paths** — Add extra Skill roots to Inventory. AgentDock observes them but never writes to them; use Adopt to copy a snapshot into a canonical library. Inventory rows can be ignored, hidden, or annotated without changing the source.
 - **Activity log & Export Logs** — Install / remove / update operations are recorded locally. Use **Settings → Export Logs** to bundle recent logs and activity history into a single zip for easier issue reports.
-- **Flexible app settings** — Configure repo path, theme, text size, language, tray behavior, proxy, Git remote, update checks, and harness order — all in one place.
-- **In-app updates** — The app tells you when a new version is out and installs it for you on macOS and Windows. Nothing downloads or installs on its own: checking only notifies, and installing and restarting each take a click.
+- **Flexible app settings** — Configure discovery paths, theme, text size, language, proxy, diagnostics, and harness order — all in one place.
 
 ## Install
 
 ### macOS
 
-Install with [Homebrew](https://brew.sh):
-
-```bash
-brew install --cask skills-manager
-```
-
-You can also download the `.dmg` for your Mac from the [latest release](https://github.com/xingkongliang/skills-manager/releases/latest).
+The AgentDock Homebrew cask is being migrated with the first AgentDock release. Until it is published, download the `.dmg` for your Mac from the [latest release](https://github.com/Zestful-ss/agentdock/releases/latest).
 
 ### Windows and Linux
 
-Download the installer for your platform from the [latest release](https://github.com/xingkongliang/skills-manager/releases/latest): `.exe` or `.msi` for Windows, and `.AppImage`, `.deb`, or `.rpm` for Linux (x64 and arm64).
+Download the installer for your platform from the [latest release](https://github.com/Zestful-ss/agentdock/releases/latest): `.exe` or `.msi` for Windows, and `.AppImage`, `.deb`, or `.rpm` for Linux (x64 and arm64).
 
-Every installer ships the CLI inside the app — see [Where the binary lives](#where-the-binary-lives).
+Every installer includes the CLI for manual installation — see [Where the binary lives](#where-the-binary-lives).
 
 ## Quick Start
 
@@ -99,26 +74,22 @@ Every installer ships the CLI inside the app — see [Where the binary lives](#w
 2. Open **My Skills** to curate the library and organize presets (membership only).
 3. Open **Inventory** to see what each harness already discovers (read-only).
 4. For project-local skills, open a **Project** and manage `.agents/skills` there.
-5. Configure discovery paths, theme, language, proxy, and Git preferences in **Settings**.
-6. Multi-device library sync still uses Git helpers under Settings / first-run restore (no sidebar Backup page in this cut).
+5. Configure discovery paths, custom read-only roots, theme, language, proxy, and diagnostics in **Settings**.
+6. Use explicit **Adopt** when an external or Harness resource should become a managed snapshot; choose User or Project each time.
 
 ## Let your agents manage skills
 
-Claude Code, Codex, Cursor and the rest can drive Skills Manager through the [`manage-skills`](skills/manage-skills/SKILL.md) skill / CLI — install and curate the canonical library rather than writing into an agent folder behind its back. That keeps source metadata, preset membership, and update tracking intact.
+Claude Code, Codex, Cursor and the rest can drive AgentDock through the [`manage-skills`](skills/manage-skills/SKILL.md) skill / CLI — install and curate the canonical library rather than writing into an agent folder behind its back. That keeps source metadata, preset membership, and update tracking intact.
 
 It is also an ordinary published skill, so it can be installed without the app:
 
 ```bash
-npx skills add xingkongliang/skills-manager
+npx skills add Zestful-ss/agentdock
 ```
 
-## Multi-device library sync (commands)
+## Local-only operation
 
-Git backup helpers still version the skill library. There is no sidebar Backup page in this cut — connect and restore from **Settings → Git Sync Configuration** and the first-run restore dialog.
-
-- **Sign in with GitHub** or paste any Git URL (HTTPS + PAT, SSH, self-hosted). Tokens live in the OS keychain when connected through the app.
-- **Merging** is skill-aware (rename on one machine combines with an edit on another); true conflicts keep the local copy until you resolve them.
-- Secrets and machine-specific wiring never leave the machine. The SQLite database is not in Git — metadata is rebuilt from skill files.
+AgentDock is a local Windows-first manager. It does not provide Git backup, multi-device sync, an application updater, a tray/background lifecycle, or a local library export/import workflow. SQLite, tags, Presets, projects, and canonical Skills remain local; Harness and MCP resources are observed read-only.
 
 ## Observed harnesses
 
@@ -185,10 +156,10 @@ Available command groups:
 - `agents` (`tools` alias) — list observed harnesses and include/exclude discovery sources
 - `skills` — manage the canonical library (`list` / `show` / `install` / `update` / `remove` / `status` / tags / presets membership)
 - `presets` — create, update, delete, organize, and inspect presets
-- `git` — operate on the git-backed `skills/` repository (`clone`, `pull`, `push`, `commit`, `versions`, `restore`)
+- `inventory` — inspect Skills/MCP rows and manage custom read-only paths
 
 Extra flags:
-- `--skills-root <path>` — operate on a cloned/exported skills repo directly instead of the local app default. The manager's state (DB, presets, cache, logs) lives in `~/.skills-manager/external/<name>-<hash>/`, namespaced by the canonical path of the skills root, so the external checkout itself stays clean.
+- `--skills-root <path>` — operate on an external canonical skills checkout instead of the local app default. The manager's state (DB, presets, cache, logs) lives in `~/.skills-manager/external/<name>-<hash>/`, namespaced by the canonical path of the skills root, so the external checkout itself stays clean.
 - `--json` — machine-readable output for scripts/agents. Failures print `{"ok": false, "code": …, "message": …}` on stderr with a non-zero exit.
 
 ```bash
@@ -197,23 +168,23 @@ npm run -s cli -- --skills-root /path/to/my-skills --json skills list
 
 #### Where the binary lives
 
-At startup the app publishes a copy of its own CLI to `~/.skills-manager/bin/skills-manager-cli`, always matching the running app, so agents can find it without anything on your PATH. A `.version` stamp beside it is written only after the copy is verified and removed before each republish, so a copy that failed — a binary held open on Windows, say — is never presented as usable.
+The CLI is installed explicitly with `npm run cli:install` or from the standalone release asset. The app does not publish or refresh a CLI copy in the background. The legacy `skills-manager-cli` executable remains available as a compatibility alias.
 
 Putting the CLI on your *own* PATH, for typing commands yourself, is separate:
 
 ```bash
 npm run cli:install
 # equivalent to:
-# cargo install --path src-tauri --bin skills-manager-cli --locked --force
+# cargo install --path src-tauri --bin agentdock-cli --bin skills-manager-cli --locked --force
 ```
 
-This drops the binary at `~/.cargo/bin/skills-manager-cli`. Re-run after pulling updates to refresh it.
+This installs the new binary at `~/.cargo/bin/agentdock-cli` and keeps the legacy `skills-manager-cli` name available. Re-run after pulling updates to refresh them.
 
-Official releases also publish standalone CLI binaries for macOS arm64/x64, Windows x64, and Linux x64. Download the matching `skills-manager-cli-*` asset, make it executable on macOS/Linux, and place it on PATH.
+Official releases publish `agentdock-cli-*` assets for macOS arm64/x64, Windows x64, and Linux x64/arm64. Download the matching asset, make it executable on macOS/Linux, and place it on PATH; legacy `skills-manager-cli-*` assets are also retained for compatibility.
 
 #### Concurrent use with the desktop app
 
-The CLI and desktop app share the same SQLite metadata index and repository lock. The app's filesystem watcher normally refreshes after canonical skill changes. If the app was suspended while a command ran, trigger one manual refresh.
+The CLI and desktop app share the same SQLite metadata index and repository lock. The desktop refreshes on navigation or explicit refresh; there is no background filesystem watcher.
 
 ### Build
 
@@ -224,15 +195,15 @@ npm run cli:build
 
 ## Troubleshooting
 
-**macOS refuses to open the app.** Releases from **v1.29.0** onward are signed with an Apple Developer ID certificate and notarized, so they open normally. If you see "Apple could not verify…" or "App is damaged", you are on v1.28.5 or older — upgrading is the fix. (Upgrading changes the code signature, so macOS may ask once more for the `skills-manager-git-backup` keychain entry; click **Always Allow**.)
+**macOS refuses to open the app.** Releases from **v1.29.0** onward are signed with an Apple Developer ID certificate and notarized, so they open normally. If you see "Apple could not verify…" or "App is damaged", you are on v1.28.5 or older — upgrading is the fix.
 
-Anything else — [open an issue](https://github.com/xingkongliang/skills-manager/issues), and attach the bundle from **Settings → Export Logs**.
+Anything else — [open an issue](https://github.com/Zestful-ss/agentdock/issues), and attach the bundle from **Settings → Export Logs**.
 
 ## Star History
 
 <p align="center">
   <a href="https://github.com/xingkongliang/star-history-svg">
-    <img src="assets/star-history.svg" width="800" alt="Star History chart for xingkongliang/skills-manager" />
+    <img src="assets/star-history.svg" width="800" alt="Star History chart for Zestful-ss/agentdock" />
   </a>
 </p>
 

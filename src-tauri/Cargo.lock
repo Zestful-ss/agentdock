@@ -4942,7 +4942,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b2aa850e253778c88a04c3d7323b043aeda9d3e30d5971937c1855769763678e"
 
 [[package]]
-name = "skills-manager"
+name = "agentdock"
 version = "1.40.0"
 dependencies = [
  "aes-gcm",
@@ -4955,16 +4955,13 @@ dependencies = [
  "gethostname",
  "git2",
  "hex",
- "image",
  "junction",
  "keyring",
  "log",
- "notify",
  "rand 0.8.5",
  "regex",
  "reqwest 0.12.28",
  "rusqlite",
- "semver",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -4976,8 +4973,6 @@ dependencies = [
  "tauri-plugin-log",
  "tauri-plugin-opener",
  "tauri-plugin-shell",
- "tauri-plugin-single-instance",
- "tauri-plugin-updater",
  "tempfile",
  "tokio",
  "unicode-normalization",

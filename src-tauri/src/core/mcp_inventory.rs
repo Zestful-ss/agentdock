@@ -69,8 +69,12 @@ pub struct McpHarnessStatus {
 /// (`--api-key`, `Authorization: Bearer …`, `?token=` URLs).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpInventoryRow {
+    pub id: String,
     pub name: String,
     pub sources: Vec<McpHarnessStatus>,
+    pub ignored: bool,
+    pub hidden: bool,
+    pub note: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -88,6 +92,10 @@ pub enum SkillLifecycle {
 pub struct SkillInventoryRow {
     pub name: String,
     pub status: SkillLifecycle,
+    /// `canonical`, `harness`, or `custom`.
+    pub source_kind: String,
+    /// `agentdock`, `external`, or `system`.
+    pub ownership: String,
     pub path: String,
     pub source_harness: String,
     pub source_display_name: String,
@@ -96,6 +104,9 @@ pub struct SkillInventoryRow {
     pub system: bool,
     pub read_only: bool,
     pub native_consumers: Vec<String>,
+    pub ignored: bool,
+    pub hidden: bool,
+    pub note: String,
 }
 
 fn hash_value(value: &Value) -> String {
@@ -299,41 +310,52 @@ fn parse_mcp_path(path: &Path, harness: &str) -> Vec<McpEntry> {
 }
 
 pub fn discover_mcp() -> Vec<McpEntry> {
+    discover_mcp_with_custom_paths(&[])
+}
+
+pub fn discover_mcp_with_custom_paths(custom_paths: &[PathBuf]) -> Vec<McpEntry> {
     let mut entries = Vec::new();
     for adapter in discovery::v1_descriptors() {
         for path in adapter.expanded_mcp_user_paths() {
             entries.extend(parse_mcp_path(&path, &adapter.id));
         }
     }
+    for path in custom_paths {
+        entries.extend(parse_mcp_path(path, "custom"));
+    }
     entries
 }
 
 pub fn inventory_rows(entries: &[McpEntry]) -> Vec<McpInventoryRow> {
-    let mut names: Vec<String> = entries.iter().map(|e| e.name.clone()).collect();
-    names.sort();
-    names.dedup();
-    let adapters = discovery::v1_descriptors();
-    names
-        .into_iter()
-        .map(|name| {
-            let matching: Vec<&McpEntry> = entries.iter().filter(|e| e.name == name).collect();
-            let sources = adapters
-                .iter()
-                .map(|adapter| {
-                    let hit = matching.iter().find(|e| e.source_harness == adapter.id);
-                    McpHarnessStatus {
-                        harness: adapter.id.clone(),
-                        display_name: adapter.name.clone(),
-                        transport: hit
-                            .map(|e| e.transport.clone())
-                            .unwrap_or(McpTransport::Unknown),
-                        source_enabled: hit.map(|e| e.source_enabled).unwrap_or(None),
-                        source_path: hit.map(|e| e.source_path.clone()).unwrap_or_default(),
-                        configured: hit.is_some(),
-                    }
-                })
-                .collect();
-            McpInventoryRow { name, sources }
+    // Do not collapse entries by server name. The same MCP name configured by
+    // two harnesses is two observable resources with two independent configs;
+    // merging them loses the source and transport distinction.
+    entries
+        .iter()
+        .map(|entry| {
+            let display_name = if entry.source_harness == "custom" {
+                "Custom read-only".to_string()
+            } else {
+                discovery::descriptor_by_id(&entry.source_harness)
+                    .map(|descriptor| descriptor.name)
+                    .unwrap_or_else(|| entry.source_harness.clone())
+            };
+            let source = McpHarnessStatus {
+                harness: entry.source_harness.clone(),
+                display_name,
+                transport: entry.transport.clone(),
+                source_enabled: entry.source_enabled,
+                source_path: entry.source_path.clone(),
+                configured: true,
+            };
+            McpInventoryRow {
+                id: entry.id.clone(),
+                name: entry.name.clone(),
+                sources: vec![source],
+                ignored: false,
+                hidden: false,
+                note: String::new(),
+            }
         })
         .collect()
 }
@@ -363,8 +385,16 @@ fn is_system_skill(path: &Path) -> bool {
 }
 
 pub fn discover_skills() -> Vec<SkillInventoryRow> {
+    discover_skills_with_custom_paths(&[])
+}
+
+/// Discover canonical, Harness, and user-configured read-only resources.
+///
+/// Every observed path is retained as its own row. A skill name appearing in
+/// two Harnesses is intentionally not merged: ownership, source and status are
+/// part of the resource identity.
+pub fn discover_skills_with_custom_paths(custom_paths: &[PathBuf]) -> Vec<SkillInventoryRow> {
     let mut rows = Vec::new();
-    let mut seen = std::collections::HashSet::new();
     let native: Vec<String> = v1::native_consumers()
         .iter()
         .map(|s| s.to_string())
@@ -372,15 +402,13 @@ pub fn discover_skills() -> Vec<SkillInventoryRow> {
 
     let managed_root = paths::user_agents_skills_dir();
     for path in skill_dirs_in(&managed_root, false) {
-        let key = paths::identity_key(&path);
-        if !seen.insert(key.clone()) {
-            continue;
-        }
         let name = super::skill_metadata::infer_skill_name(&path);
         let meta = super::skill_metadata::parse_skill_md(&path);
         rows.push(SkillInventoryRow {
             name,
             status: SkillLifecycle::Managed,
+            source_kind: "canonical".to_string(),
+            ownership: "agentdock".to_string(),
             path: path.display().to_string(),
             source_harness: "agents".to_string(),
             source_display_name: "User .agents".to_string(),
@@ -389,6 +417,9 @@ pub fn discover_skills() -> Vec<SkillInventoryRow> {
             system: false,
             read_only: false,
             native_consumers: native.clone(),
+            ignored: false,
+            hidden: false,
+            note: String::new(),
         });
     }
 
@@ -400,10 +431,6 @@ pub fn discover_skills() -> Vec<SkillInventoryRow> {
             }
             let recursive = adapter.id == "antigravity";
             for path in skill_dirs_in(&root, recursive) {
-                let key = paths::identity_key(&path);
-                if !seen.insert(key) {
-                    continue;
-                }
                 if paths::same_path(path.parent().unwrap_or(&path), &managed_root) {
                     continue;
                 }
@@ -420,20 +447,53 @@ pub fn discover_skills() -> Vec<SkillInventoryRow> {
                     } else {
                         SkillLifecycle::Discovered
                     },
+                    source_kind: "harness".to_string(),
+                    ownership: if system { "system" } else { "external" }.to_string(),
                     path: path.display().to_string(),
                     source_harness: adapter.id.clone(),
                     source_display_name: adapter.name.clone(),
                     description: meta.description,
                     fingerprint: content_hash::hash_directory(&path).ok(),
                     system,
-                    read_only: system,
+                    read_only: true,
                     native_consumers: if adapter.native_consumer {
                         vec![adapter.id.clone()]
                     } else {
                         Vec::new()
                     },
+                    ignored: false,
+                    hidden: false,
+                    note: String::new(),
                 });
             }
+        }
+    }
+
+    for root in custom_paths {
+        let mut candidates = skill_dirs_in(root, false);
+        if super::skill_metadata::is_valid_skill_dir(root) {
+            candidates.push(root.clone());
+        }
+        for path in candidates {
+            let name = super::skill_metadata::infer_skill_name(&path);
+            let meta = super::skill_metadata::parse_skill_md(&path);
+            rows.push(SkillInventoryRow {
+                name,
+                status: SkillLifecycle::Discovered,
+                source_kind: "custom".to_string(),
+                ownership: "external".to_string(),
+                path: path.display().to_string(),
+                source_harness: "custom".to_string(),
+                source_display_name: "Custom read-only".to_string(),
+                description: meta.description,
+                fingerprint: content_hash::hash_directory(&path).ok(),
+                system: false,
+                read_only: true,
+                native_consumers: Vec::new(),
+                ignored: false,
+                hidden: false,
+                note: String::new(),
+            });
         }
     }
 
@@ -460,22 +520,19 @@ pub fn discover_project_skills_at(
     project_root: &Path,
 ) -> Vec<SkillInventoryRow> {
     let mut rows = Vec::new();
-    let mut seen = std::collections::HashSet::new();
     let native: Vec<String> = v1::native_consumers()
         .iter()
         .map(|s| s.to_string())
         .collect();
 
     for path in skill_dirs_in(&managed_root, false) {
-        let key = paths::identity_key(&path);
-        if !seen.insert(key) {
-            continue;
-        }
         let name = super::skill_metadata::infer_skill_name(&path);
         let meta = super::skill_metadata::parse_skill_md(&path);
         rows.push(SkillInventoryRow {
             name,
             status: SkillLifecycle::Managed,
+            source_kind: "canonical".to_string(),
+            ownership: "agentdock".to_string(),
             path: path.display().to_string(),
             source_harness: "agents".to_string(),
             source_display_name: "Project .agents".to_string(),
@@ -484,6 +541,9 @@ pub fn discover_project_skills_at(
             system: false,
             read_only: false,
             native_consumers: native.clone(),
+            ignored: false,
+            hidden: false,
+            note: String::new(),
         });
     }
 
@@ -494,23 +554,24 @@ pub fn discover_project_skills_at(
             }
             let root = project_root.join(rel.replace('/', std::path::MAIN_SEPARATOR_STR));
             for path in skill_dirs_in(&root, false) {
-                let key = paths::identity_key(&path);
-                if !seen.insert(key) {
-                    continue;
-                }
                 let name = super::skill_metadata::infer_skill_name(&path);
                 let meta = super::skill_metadata::parse_skill_md(&path);
                 rows.push(SkillInventoryRow {
                     name,
                     status: SkillLifecycle::Discovered,
+                    source_kind: "harness".to_string(),
+                    ownership: "external".to_string(),
                     path: path.display().to_string(),
                     source_harness: adapter.id.clone(),
                     source_display_name: adapter.name.clone(),
                     description: meta.description,
                     fingerprint: content_hash::hash_directory(&path).ok(),
                     system: false,
-                    read_only: false,
+                    read_only: true,
                     native_consumers: Vec::new(),
+                    ignored: false,
+                    hidden: false,
+                    note: String::new(),
                 });
             }
         }
@@ -543,42 +604,32 @@ mod tests {
     }
 
     #[test]
-    fn same_name_keeps_per_source_transport() {
-        // exa over HTTP in one harness and stdio in another must not collapse
-        // into a single sampled transport.
+    fn same_name_keeps_one_row_per_source() {
+        // exa over HTTP in one harness and stdio in another must remain two
+        // observable resources rather than one merged, lossy row.
         let entries = vec![
             entry("opencode", "exa", McpTransport::StreamableHttp, Some(true)),
             entry("maka", "exa", McpTransport::Stdio, None),
         ];
         let rows = inventory_rows(&entries);
-        assert_eq!(rows.len(), 1);
-        let sources: std::collections::HashMap<_, _> = rows[0]
-            .sources
-            .iter()
-            .filter(|s| s.configured)
-            .map(|s| (s.harness.as_str(), s))
-            .collect();
-        assert_eq!(
-            sources["opencode"].transport,
-            McpTransport::StreamableHttp
-        );
-        assert_eq!(sources["maka"].transport, McpTransport::Stdio);
-        assert_eq!(sources["opencode"].source_enabled, Some(true));
-        // Unknown enablement stays unknown; the UI renders it "Configured".
-        assert_eq!(sources["maka"].source_enabled, None);
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|row| row.sources.len() == 1));
+        assert_eq!(rows[0].sources[0].harness, "opencode");
+        assert_eq!(rows[0].sources[0].transport, McpTransport::StreamableHttp);
+        assert_eq!(rows[0].sources[0].source_enabled, Some(true));
+        assert_eq!(rows[1].sources[0].harness, "maka");
+        assert_eq!(rows[1].sources[0].transport, McpTransport::Stdio);
+        assert_eq!(rows[1].sources[0].source_enabled, None);
     }
 
     #[test]
-    fn unconfigured_harnesses_carry_no_transport() {
+    fn a_row_contains_only_its_observed_source() {
         let entries = vec![entry("maka", "solo", McpTransport::Stdio, Some(false))];
         let rows = inventory_rows(&entries);
-        let unconfigured = rows[0]
-            .sources
-            .iter()
-            .find(|s| s.harness == "codex")
-            .unwrap();
-        assert!(!unconfigured.configured);
-        assert_eq!(unconfigured.transport, McpTransport::Unknown);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].sources.len(), 1);
+        assert!(rows[0].sources[0].configured);
+        assert_eq!(rows[0].sources[0].transport, McpTransport::Stdio);
     }
 
     #[test]

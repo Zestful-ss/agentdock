@@ -74,6 +74,17 @@ pub fn resolve_user_root() -> Result<ResolvedRoot, AppError> {
     ResolvedRoot::new(paths::user_agents_skills_dir())
 }
 
+pub(crate) fn ensure_project_workspace(
+    record: &super::skill_store::ProjectRecord,
+) -> Result<(), AppError> {
+    if record.workspace_type != "project" {
+        return Err(AppError::invalid_input(
+            "Linked workspaces are no longer supported; register the repository as a project",
+        ));
+    }
+    Ok(())
+}
+
 /// Resolve a project-level canonical root from a `SkillStore` project id.
 ///
 /// The frontend passes a project **id**, never a directory. The directory comes
@@ -86,6 +97,7 @@ pub fn resolve_project_root(
         .get_project_by_id(project_id)
         .map_err(AppError::db)?
         .ok_or_else(|| AppError::not_found("Project not found"))?;
+    ensure_project_workspace(&record)?;
     let root = paths::project_agents_skills_dir(Path::new(&record.path));
     Ok((record.path, ResolvedRoot::new(root)?))
 }
@@ -101,6 +113,7 @@ pub fn resolve_project_root_for_read(
         .get_project_by_id(project_id)
         .map_err(AppError::db)?
         .ok_or_else(|| AppError::not_found("Project not found"))?;
+    ensure_project_workspace(&record)?;
     let root = paths::project_agents_skills_dir(Path::new(&record.path));
     Ok((record.path, root))
 }
@@ -117,6 +130,7 @@ pub fn resolve_existing_project_skill(
         .get_project_by_id(project_id)
         .map_err(AppError::db)?
         .ok_or_else(|| AppError::not_found("Project not found"))?;
+    ensure_project_workspace(&record)?;
     let root = paths::project_agents_skills_dir(Path::new(&record.path));
     if !root.is_dir() {
         return Err(AppError::not_found("Project skills directory not found"));
@@ -1016,6 +1030,34 @@ mod tests {
 
         // Unknown ids never resolve to a writable root.
         assert!(resolve_project_root(&store, "nope").is_err());
+    }
+
+    #[test]
+    fn linked_workspace_records_cannot_resolve_a_project_root() {
+        use super::super::skill_store::{ProjectRecord, SkillStore};
+
+        let tmp = tempdir().unwrap();
+        let project_dir = tmp.path().join("legacy-linked");
+        fs::create_dir_all(&project_dir).unwrap();
+        let store = SkillStore::new(&tmp.path().join("test.db")).unwrap();
+        store
+            .insert_project(&ProjectRecord {
+                id: "linked-1".to_string(),
+                name: "legacy-linked".to_string(),
+                path: project_dir.display().to_string(),
+                workspace_type: "linked".to_string(),
+                linked_agent_key: Some("claude_code".to_string()),
+                linked_agent_name: Some("Claude Code".to_string()),
+                disabled_path: None,
+                sort_order: 0,
+                created_at: 0,
+                updated_at: 0,
+            })
+            .unwrap();
+
+        let error = resolve_project_root(&store, "linked-1").unwrap_err();
+        assert!(matches!(error.kind, super::super::error::ErrorKind::InvalidInput));
+        assert!(resolve_project_root_for_read(&store, "linked-1").is_err());
     }
 
     struct IsolatedBase {

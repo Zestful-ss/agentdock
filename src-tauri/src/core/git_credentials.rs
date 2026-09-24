@@ -200,7 +200,7 @@ pub fn install_git2_credentials(callbacks: &mut git2::RemoteCallbacks<'_>, url: 
 /// scripts through its bundled sh, so a single POSIX script covers all
 /// platforms.
 const ASKPASS_SCRIPT: &str = "#!/bin/sh\n\
-# Managed by Skills Manager. Supplies git credentials from the environment.\n\
+# Managed by AgentDock. Supplies git credentials from the environment.\n\
 case \"$1\" in\n\
   *[Uu]sername*) printf '%s\\n' \"${SKILLS_MANAGER_ASKPASS_USERNAME}\" ;;\n\
   *) printf '%s\\n' \"${SKILLS_MANAGER_ASKPASS_PASSWORD}\" ;;\n\

@@ -1,5 +1,5 @@
 {
-  "name": "skills-manager",
+  "name": "agentdock",
   "private": true,
   "version": "1.40.0",
   "license": "MIT",
@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "release:prepare": "node scripts/prepare-release.mjs",
+    "check:rename": "node scripts/verify-agentdock-migration.mjs",
     "tauri": "tauri",
     "tauri:dev": "tauri dev --config src-tauri/tauri.dev.conf.json",
     "tauri:build": "tauri build",
@@ -28,7 +29,6 @@
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
     "@tauri-apps/plugin-opener": "^2.5.3",
     "@tauri-apps/plugin-shell": "^2.3.5",
-    "@tauri-apps/plugin-updater": "^2.10.0",
     "clsx": "^2.1.1",
     "i18next": "^25.8.13",
     "lucide-react": "^0.575.0",

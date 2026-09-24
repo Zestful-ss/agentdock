@@ -286,7 +286,7 @@ function AddSkillsSheetBody({ onClose, target, managedSkills, onInstalled }: Pro
           const skill = managedSkills.find((s) => s.id === id);
           if (!skill) continue;
           if (!canInstallToProject(skill, ctx)) continue;
-          await api.exportSkillToProject(id, target.projectId);
+          await api.copySkillToProject(id, target.projectId);
           ok++;
         } catch (e) {
           failed++;

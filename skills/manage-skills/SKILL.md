@@ -1,48 +1,25 @@
 ---
 name: manage-skills
-description: Manage the user's canonical agent-skill library (~/.agents/skills and <repo>/.agents/skills) via skills-manager-cli — install, update, remove, curate presets, organize tags, search, and adopt existing skills. Use this whenever the user wants a skill added or removed from the library, wants presets/tags organized, or asks what is installed. Harnesses are discovery sources only; do not write into harness-specific folders.
+description: Manage the user's canonical agent-skill library (~/.agents/skills and <repo>/.agents/skills) via agentdock-cli — install, update, remove, curate presets, organize tags, search, and adopt existing skills. Use this whenever the user wants a skill added or removed from the library, wants presets/tags organized, or asks what is installed. Harnesses are discovery sources only; do not write into harness-specific folders.
 ---
 
 ## Before doing anything
 
-1. **Resolve the CLI first, then use the path it prints.** Run this once (POSIX
-   shell):
+1. **Resolve the CLI first, then use the path it prints.** AgentDock does not
+   publish a background bridge copy. Prefer the explicitly installed binary:
 
    ```bash
-   D="$HOME/.skills-manager/bin"
-   B="$D/skills-manager-cli"; [ -e "$B" ] || B="$B.exe"   # .exe on Windows
-   if [ -s "$D/.version" ] && [ -x "$B" ]; then
-     echo "$B"
-   elif [ -s "$D/.version" ] || [ -e "$B" ]; then
-     echo BRIDGE_BROKEN
-   else
-     P="$(command -v skills-manager-cli 2>/dev/null || true)"
-     [ -x "$P" ] && echo "$P"
-   fi
+   P="$(command -v agentdock-cli 2>/dev/null || command -v skills-manager-cli 2>/dev/null || true)"
+   [ -x "$P" ] && echo "$P"
    ```
 
    **Substitute the printed path into every command below**, wherever the
    examples write `$SM`. Do not carry `$SM` as a shell variable: each command
    you run is a new shell, so an assignment made here is gone by the next one.
 
-   The three outcomes:
-
-   - **A path under `~/.skills-manager/bin`** — the desktop app published this
-     copy, and the `.version` stamp appears only after it has been verified, so
-     it always matches the app the user is running. Use it.
-   - **`BRIDGE_BROKEN`** — something the app left behind is here but does not
-     add up: an unstamped binary, or a stamp with no binary beside it. Either is
-     what a copy that failed half-way leaves. **Stop.** Do not go looking
-     for another CLI: that binary may predate a safety fix, and the machine has
-     a desktop app whose version nothing here can match. Ask the user to open
-     the Skills Manager app once, which republishes it.
-   - **A path from PATH** — nothing was ever published here, so there is no
-     stale copy to worry about: this is a CLI-only machine (a server install, a
-     standalone download, a hand-built binary). Use it, but note it can be
-     older than a desktop app if one is also installed.
-
-   If nothing is printed at all, this skill doesn't apply — fall back to
-   find-skills, or tell the user to install Skills Manager.
+   If nothing is printed, ask the user to install the standalone CLI with
+   `npm run cli:install` or place the release asset on PATH. Do not search for
+   or execute an unverified binary under the legacy metadata directory.
 2. **Always pass `--json` when you parse output yourself.** Pretty-printed output is for the user; JSON is for you. Errors include `ok=false`, a stable `code`, and `message` on stderr with a non-zero exit code.
 
 ```bash
@@ -54,11 +31,11 @@ description: Manage the user's canonical agent-skill library (~/.agents/skills a
 V1 writes skills only into the canonical roots — user `~/.agents/skills/` and project `<repo>/.agents/skills/` — not into harness-specific folders. Harnesses are discovery sources (Inventory / MCP observe them); they are not deployment targets. Each skill has source metadata, preset membership, tags, and a canonical location. A **preset** is a reusable curation group; several presets may be members at the same time.
 
 Keep these three states separate:
-- **Library**: install/remove controls whether Skills Manager owns the skill under `.agents`.
+- **Library**: install/remove controls whether AgentDock owns the skill under `.agents`.
 - **Preset membership**: `presets add-skill/remove-skill` organizes the library only (curation, not disk sync).
 - **Harness observation**: Inventory / agents list report what a harness already sees; they never write into harness dirs.
 
-Internally, presets are still stored as scenarios for backward-compatible Git Backup. The CLI and UI call them presets.
+Internally, presets are still stored as scenarios for SQLite/schema compatibility. The CLI and UI call them presets; they are curation metadata only.
 
 ## Install
 
@@ -140,7 +117,25 @@ Remove deletes the canonical library directory and its metadata row. Legacy Harn
 "$SM" --json skills status <skill>
 ```
 
-`skills status` reports what the library owns. Harness directories are observe-only in V1; there is no CLI path that writes them.
+`skills status` reports the local library record and discovered agent availability. It does not report or filter by deployment projections; Harness directories are observe-only in V1 and there is no CLI path that writes them.
+
+## Inventory
+
+```bash
+"$SM" --json inventory skills
+"$SM" --json inventory mcp
+"$SM" --json inventory paths list
+"$SM" --json inventory paths add C:\\Tools\\shared-skills
+"$SM" --json inventory paths remove C:\\Tools\\shared-skills --dry-run
+"$SM" --json inventory state --kind skill C:\\Users\\me\\.claude\\skills\\my-skill --ignored true
+# MCP state uses the row id, so different servers sharing one config stay independent
+"$SM" --json inventory state --kind mcp opencode:github:C:\\Users\\me\\AppData\\Roaming\\opencode\\settings.json --ignored true
+```
+
+Inventory rows retain source and ownership. Duplicate names from different
+Harnesses are separate resources; MCP rows never expose commands, arguments,
+environment variables, headers, or raw config. Custom paths are read-only
+until an explicit Adopt copies a snapshot into a canonical library.
 
 ## Adopt skills installed elsewhere
 

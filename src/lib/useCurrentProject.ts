@@ -1,7 +1,8 @@
 import { useCallback, useMemo, useState } from "react";
 import { useApp } from "../context/AppContext";
 
-export const CURRENT_PROJECT_LS_KEY = "skills-manager.currentProjectId";
+export const CURRENT_PROJECT_LS_KEY = "agentdock.currentProjectId";
+const LEGACY_CURRENT_PROJECT_LS_KEY = "skills-manager.currentProjectId";
 
 /**
  * The single-project context shared by Inventory and Install.
@@ -13,7 +14,10 @@ export function useCurrentProject() {
   const { projects } = useApp();
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(() => {
     try {
-      return localStorage.getItem(CURRENT_PROJECT_LS_KEY);
+      return (
+        localStorage.getItem(CURRENT_PROJECT_LS_KEY) ||
+        localStorage.getItem(LEGACY_CURRENT_PROJECT_LS_KEY)
+      );
     } catch {
       return null;
     }

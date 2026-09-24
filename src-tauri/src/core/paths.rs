@@ -17,17 +17,26 @@ pub fn project_agents_skills_dir(project_root: &Path) -> PathBuf {
 }
 
 pub fn expand_windows_path(template: &str) -> PathBuf {
-    let mut value = template.replace('/', "\\");
-    if let Ok(userprofile) = std::env::var("USERPROFILE") {
-        value = value.replace("%USERPROFILE%", &userprofile);
+    #[cfg(windows)]
+    {
+        let mut value = template.replace('/', "\\");
+        if let Ok(userprofile) = std::env::var("USERPROFILE") {
+            value = value.replace("%USERPROFILE%", &userprofile);
+        }
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            value = value.replace("%APPDATA%", &appdata);
+        }
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            value = value.replace("%LOCALAPPDATA%", &local);
+        }
+        PathBuf::from(value)
     }
-    if let Ok(appdata) = std::env::var("APPDATA") {
-        value = value.replace("%APPDATA%", &appdata);
+    #[cfg(not(windows))]
+    {
+        // Do not apply Windows slash conversion to native Unix paths. A value
+        // such as `/home/me/skills` must remain absolute on macOS/Linux.
+        PathBuf::from(template)
     }
-    if let Ok(local) = std::env::var("LOCALAPPDATA") {
-        value = value.replace("%LOCALAPPDATA%", &local);
-    }
-    PathBuf::from(value)
 }
 
 /// Platform-aware path identity used by the managed index.
@@ -67,6 +76,15 @@ pub fn same_path(a: &Path, b: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_paths_remain_native_when_expanding() {
+        assert_eq!(
+            expand_windows_path("/home/me/skills"),
+            PathBuf::from("/home/me/skills")
+        );
+    }
 
     #[test]
     fn identity_ignores_slash_and_case() {

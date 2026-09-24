@@ -170,5 +170,5 @@ When adjusting skill detection in this repository, review these areas together:
 - `src-tauri/src/core/project_scanner.rs`
 - `src-tauri/src/commands/skills.rs`
 - `src-tauri/src/commands/projects.rs`
-- `src-tauri/src/commands/git_backup.rs`
+- `src-tauri/src/core/mcp_inventory.rs`
 - related tests for import, scanning, and project workspace detection

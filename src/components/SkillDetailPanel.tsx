@@ -18,18 +18,15 @@ import {
   type SkillDocument,
   type SourceSkillDocument,
   type SkillSourceDiff,
-  type ToolInfo,
 } from "../lib/tauri";
 import { SkillSourceDiffViewer } from "./SkillSourceDiffViewer";
 import { DetailSheet } from "./DetailSheet";
 import { SkillMarkdown } from "./SkillMarkdown";
 import { SkillProjectsSection } from "./SkillProjectsSection";
-import { SyncDots } from "./SyncDots";
 
 interface Props {
   skill: ManagedSkill | null;
   onClose: () => void;
-  tools?: ToolInfo[];
   projects?: Project[];
   onProjectsChanged?: () => void;
 }
@@ -37,7 +34,6 @@ interface Props {
 export function SkillDetailPanel({
   skill,
   onClose,
-  tools,
   projects,
   onProjectsChanged,
 }: Props) {
@@ -58,7 +54,6 @@ export function SkillDetailPanel({
       key={panelKey}
       skill={skill}
       onClose={onClose}
-      tools={tools}
       projects={projects}
       onProjectsChanged={onProjectsChanged}
     />
@@ -68,13 +63,11 @@ export function SkillDetailPanel({
 function SkillDetailPanelContent({
   skill,
   onClose,
-  tools,
   projects,
   onProjectsChanged,
 }: {
   skill: ManagedSkill;
   onClose: () => void;
-  tools?: ToolInfo[];
   projects?: Project[];
   onProjectsChanged?: () => void;
 }) {
@@ -199,10 +192,8 @@ function SkillDetailPanelContent({
   const meta = (
     <>
       <div className="flex flex-wrap items-center gap-2 text-[12.5px] text-muted">
-        {tools && <SyncDots skill={skill} tools={tools} size="sm" includeOrphan />}
         {skill.tags.length > 0 && (
           <>
-            {tools && <span className="mx-0.5 h-3 w-px bg-border-subtle" />}
             {skill.tags.map((tag) => (
               <span
                 key={tag}

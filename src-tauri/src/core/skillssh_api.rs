@@ -39,7 +39,7 @@ impl LeaderboardType {
 
 pub fn build_http_client(proxy_url: Option<&str>, timeout_secs: u64) -> reqwest::blocking::Client {
     let mut builder = reqwest::blocking::Client::builder()
-        .user_agent("skills-manager")
+        .user_agent("agentdock")
         .timeout(std::time::Duration::from_secs(timeout_secs));
     if let Some(proxy) = proxy_url.filter(|s| !s.is_empty()) {
         if let Ok(p) = reqwest::Proxy::all(proxy) {

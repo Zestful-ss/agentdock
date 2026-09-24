@@ -7,10 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Developer & Governance
-- **V1.1 hardening** — Tool toggles and path edits are discovery-only; Preset CRUD no longer performs Harness synchronization; linked project workspaces and project `skills-disabled` entry points are removed.
-- **Canonical integrity** — Managed deletion and skills.sh CLI installation use the canonical writer; project creation initializes only `<repo>/.agents/skills`; updates pause when the live canonical copy was edited locally.
-- **Reliability** — Project inventory is single-level and read-only, Git ref queries have a bounded timeout, scan/adopt results are reconciled under the repository lock, and frontend CI now runs build/lint/i18n checks.
+### AgentDock local-only surface
+- Unified Skills/MCP inventory now retains source, ownership, duplicate rows, custom read-only paths, and per-resource ignore/hide/note state.
+- Adopt conflicts open a `SKILL.md` diff before replacement; locally modified managed skills are not overwritten.
+- MCP ignore/hide/note state is keyed by the individual inventory row, and desktop/CLI inventory now share the same state-aware builders.
+- Custom read-only paths cannot point at a canonical user/project `.agents/skills` library; stale saved entries are ignored safely.
+- Database v10 clears retired deployment projections and linked-workspace rows; CLI skill/preset status no longer reports or filters by deployment state.
+- Git backup, multi-device merge, app updater, tray/background lifecycle, startup CLI bridge, filesystem watcher, generic library export, Traditional Chinese, and Dashboard surfaces are removed.
+- The standalone `agentdock-cli` and `inventory` commands remain available for local automation.
 
 ## [1.41.0] - 2026-09-23
 
@@ -24,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Preset is curation** — Preset membership organizes the library (`/my-skills` deep link); tray no longer offers apply-to-agents presets.
 
 ### Developer & Governance
+- **AgentDock rename** — The product, package, desktop bundle, primary CLI, and active icon set are now branded `AgentDock` / `agentdock-cli`. Existing metadata paths, sync protocol identifiers, signing identity, installer upgrade identity, and the `skills-manager-cli` executable remain compatible during the transition.
+- **V1.1 hardening** — Tool toggles and path edits are discovery-only; Preset CRUD no longer performs Harness synchronization; linked project workspaces and project `skills-disabled` entry points are removed.
+- **Canonical integrity** — Managed deletion and skills.sh CLI installation use the canonical writer; project creation initializes only `<repo>/.agents/skills`; updates pause when the live canonical copy was edited locally.
+- **Reliability** — Project inventory is single-level and read-only, Git ref queries have a bounded timeout, scan/adopt results are reconciled under the repository lock, and frontend CI now runs build/lint/i18n checks.
 - **Install unification (P2.2)** — App and CLI git/local install go through `confirm_git_install_inner` / `canonical::install_skill_dir*` (`replace=false` → `target_conflict`). CLI git install does not take RepoLock outside the inner path; scenario membership is fixed up after the lock is released.
 - **Dead code removal (P2.3)** — Deleted `commands/browse.rs`, `commands/sync.rs`, `apply_preset_from_tray` / tray schedule refresh, `installer::install_from_git_dir`, and unused helpers in `git_backup`, `scanner`, `tool_adapters`, `sync_metadata`, `agent_workspace`. Moved #363 shared-directory regression tests into `scenario_service`.
 - **V1 invariant closure (P2.6)** — Startup only ensures default preset state (no backfill spawn); `update_global_local_skill_from_center` unregistered; CLI hard-blocks `skills deploy/undeploy/sync` and `presets apply/deactivate/deploy/undeploy` with `v1::POLICY_MESSAGE`; `install --sync/--sync-preset` retired; `delete_managed_skills_by_ids` no longer touches `target_path`; update/reimport/set-source no longer call `resync_copy_targets`; `pending_removals_for` no longer inspects harness copies. `scan.rs` import paths reuse `canonical::register_user_skill`.

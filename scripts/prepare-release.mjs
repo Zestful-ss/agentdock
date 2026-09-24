@@ -8,13 +8,12 @@ const args = process.argv.slice(2);
 
 const releaseArg = args.find((arg) => !arg.startsWith('--'));
 const dryRun = args.includes('--dry-run');
+const dateStr = new Date().toISOString().slice(0, 10);
 
 if (!releaseArg) {
   console.error('Usage: npm run release:prepare -- <patch|minor|major|x.y.z> [--dry-run]');
   process.exit(1);
 }
-
-const dateStr = new Date().toISOString().slice(0, 10);
 
 const packagePath = path.join(root, 'package.json');
 const packageLockPath = path.join(root, 'package-lock.json');
@@ -23,7 +22,6 @@ const cargoTomlPath = path.join(root, 'src-tauri', 'Cargo.toml');
 const cargoLockPath = path.join(root, 'src-tauri', 'Cargo.lock');
 const enI18nPath = path.join(root, 'src', 'i18n', 'en.json');
 const zhI18nPath = path.join(root, 'src', 'i18n', 'zh.json');
-const zhTwI18nPath = path.join(root, 'src', 'i18n', 'zh-TW.json');
 const changelogPath = path.join(root, 'CHANGELOG.md');
 const changelogZhPath = path.join(root, 'CHANGELOG-zh.md');
 
@@ -90,9 +88,9 @@ function updateCargoPackageVersion(cargoToml, nextVersion) {
 }
 
 function updateCargoLockVersion(cargoLock, nextVersion) {
-  const packagePattern = /(\[\[package\]\]\nname = "skills-manager"\nversion = ")[^"]+("\n)/;
+  const packagePattern = /(\[\[package\]\]\r?\nname = "agentdock"\r?\nversion = ")[^"]+("\r?\n)/;
   if (!packagePattern.test(cargoLock)) {
-    throw new Error('Missing skills-manager package entry in src-tauri/Cargo.lock');
+    throw new Error('Missing agentdock package entry in src-tauri/Cargo.lock');
   }
   return cargoLock.replace(
     packagePattern,
@@ -100,24 +98,74 @@ function updateCargoLockVersion(cargoLock, nextVersion) {
   );
 }
 
-function ensureChangelogEntry(changelog, nextVersion, { zh = false } = {}) {
-  const heading = `## [${nextVersion}] - ${dateStr}`;
-  if (changelog.includes(heading) || changelog.includes(`## [${nextVersion}] -`)) {
-    return changelog;
+function sectionAfterHeading(text, headingPattern) {
+  const match = headingPattern.exec(text);
+  if (!match) return '';
+
+  const afterHeading = text.slice(match.index + match[0].length);
+  const nextHeading = afterHeading.search(/^## \[/m);
+  return nextHeading === -1 ? afterHeading : afterHeading.slice(0, nextHeading);
+}
+
+function hasSubstantiveContent(section) {
+  return section
+    .split('\n')
+    .map((line) => line.trim())
+    .some((line) => {
+      if (!line || line.startsWith('#')) return false;
+      const isPlaceholder = line.startsWith('_') && line.endsWith('_');
+      return !isPlaceholder;
+    });
+}
+
+function updateChangelogDate(changelog, version, date) {
+  const escapedVersion = version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const headingPattern = new RegExp(`^(## \\[${escapedVersion}\\](?: - )?)(?:\\d{4}-\\d{2}-\\d{2})?$`, 'm');
+  if (!headingPattern.test(changelog)) {
+    throw new Error(`Missing ${version} heading while updating release date`);
+  }
+  return changelog.replace(
+    headingPattern,
+    `## [${version}] - ${date}`,
+  );
+}
+
+function requireChangelogEntry(changelog, version, { zh = false, label = 'CHANGELOG.md' } = {}) {
+  const escapedVersion = version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const headingPattern = new RegExp(`^## \\[${escapedVersion}\\](?: - .*)?$`, 'm');
+  const match = headingPattern.exec(changelog);
+  if (!match) {
+    throw new Error(`Missing ${label} release notes for ${version}; add a complete section before preparing the release`);
   }
 
-  const sections = zh
-    ? ['### 发布概览', '- ', '', '### 用户可见更新', '- ', '', '### 开发者与治理更新', '- ']
-    : ['### Release Overview', '- ', '', '### User-facing', '- ', '', '### Developer & Governance', '- '];
-
-  const entry = [heading, '', ...sections, ''].join('\n');
-
-  const firstReleaseHeading = changelog.search(/^## \[/m);
-  if (firstReleaseHeading === -1) {
-    return `${changelog.trimEnd()}\n\n${entry}\n`;
+  const afterHeading = changelog.slice(match.index + match[0].length);
+  const nextHeading = afterHeading.search(/^## \[/m);
+  const section = nextHeading === -1 ? afterHeading : afterHeading.slice(0, nextHeading);
+  const headings = zh
+    ? ['### 发布概览', '### 用户可见更新', '### 开发者与治理更新']
+    : ['### Release Overview', '### User-facing', '### Developer & Governance'];
+  for (const heading of headings) {
+    if (!section.includes(heading)) {
+      throw new Error(`${label} section ${version} is missing ${heading}`);
+    }
   }
 
-  return `${changelog.slice(0, firstReleaseHeading)}${entry}${changelog.slice(firstReleaseHeading)}`;
+  const hasContent = section
+    .split('\n')
+    .some((line) => line.trim() && !line.startsWith('#') && line.trim() !== '-');
+  if (!hasContent) {
+    throw new Error(`${label} section ${version} contains only placeholders; add release notes before preparing the release`);
+  }
+
+  const unreleasedHeading = zh
+    ? /^## \[未发布\][^\S\r\n]*$/m
+    : /^## \[Unreleased\][^\S\r\n]*$/m;
+  const unreleased = sectionAfterHeading(changelog, unreleasedHeading);
+  if (hasSubstantiveContent(unreleased)) {
+    throw new Error(`${label} still has substantive Unreleased content; fold it into ${version} before preparing a release`);
+  }
+
+  return changelog;
 }
 
 // Refresh the README star-history snapshot. Best-effort: a failure here (no gh
@@ -135,7 +183,6 @@ function main() {
   const cargoLock = fs.readFileSync(cargoLockPath, 'utf8');
   const en = readJson(enI18nPath);
   const zh = readJson(zhI18nPath);
-  const zhTw = readJson(zhTwI18nPath);
   const changelog = fs.readFileSync(changelogPath, 'utf8');
   const changelogZh = fs.readFileSync(changelogZhPath, 'utf8');
 
@@ -156,9 +203,19 @@ function main() {
   const nextCargoLock = updateCargoLockVersion(cargoLock, nextVersion);
   updateSettingsVersion(en, nextVersion, 'src/i18n/en.json');
   updateSettingsVersion(zh, nextVersion, 'src/i18n/zh.json');
-  updateSettingsVersion(zhTw, nextVersion, 'src/i18n/zh-TW.json');
-  const nextChangelog = ensureChangelogEntry(changelog, nextVersion);
-  const nextChangelogZh = ensureChangelogEntry(changelogZh, nextVersion, { zh: true });
+  const nextChangelog = updateChangelogDate(
+    requireChangelogEntry(changelog, nextVersion, { label: 'CHANGELOG.md' }),
+    nextVersion,
+    dateStr,
+  );
+  const nextChangelogZh = updateChangelogDate(
+    requireChangelogEntry(changelogZh, nextVersion, {
+      zh: true,
+      label: 'CHANGELOG-zh.md',
+    }),
+    nextVersion,
+    dateStr,
+  );
 
   if (dryRun) {
     console.log(`[dry-run] ${currentVersion} -> ${nextVersion}`);
@@ -172,7 +229,6 @@ function main() {
   fs.writeFileSync(cargoLockPath, nextCargoLock);
   writeJson(enI18nPath, en);
   writeJson(zhI18nPath, zh);
-  writeJson(zhTwI18nPath, zhTw);
   fs.writeFileSync(changelogPath, nextChangelog);
   fs.writeFileSync(changelogZhPath, nextChangelogZh);
 
@@ -189,7 +245,6 @@ function main() {
   console.log('- src-tauri/Cargo.lock');
   console.log('- src/i18n/en.json');
   console.log('- src/i18n/zh.json');
-  console.log('- src/i18n/zh-TW.json');
   console.log(
     starOk
       ? '- assets/star-history.svg'

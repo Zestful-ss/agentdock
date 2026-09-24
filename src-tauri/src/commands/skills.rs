@@ -2170,7 +2170,7 @@ pub fn update_git_skill_internal(
         // version drops is one entry, so a file created *inside* it afterwards
         // does not change the list; approving `outputs/` approves the subtree. It cannot close the window
         // between this scan and the removal itself: the repo lock holds off
-        // Skills Manager, not the agent processes writing into these very
+        // AgentDock, not the agent processes writing into these very
         // directories. Narrowing that further needs the directories frozen
         // before the scan, not another scan.
         let approval = removal_approval_token(&remote_revision, &pending);
@@ -3279,121 +3279,6 @@ pub async fn cancel_install(
 ) -> Result<bool, AppError> {
     Ok(cancel_registry.cancel(&key))
 }
-
-#[derive(Debug, Serialize)]
-pub struct BatchImportResult {
-    pub imported: usize,
-    pub skipped: usize,
-    pub errors: Vec<String>,
-}
-
-#[tauri::command]
-pub async fn batch_import_folder(
-    folder_path: String,
-    store: State<'_, Arc<SkillStore>>,
-    app_handle: tauri::AppHandle,
-) -> Result<BatchImportResult, AppError> {
-    let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        use tauri::Emitter;
-
-        let root = PathBuf::from(&folder_path);
-        if !root.is_dir() {
-            return Err(AppError::invalid_input("Selected path is not a directory"));
-        }
-
-        // Collect valid skill subdirectories (depth=1)
-        let mut skill_dirs: Vec<PathBuf> = Vec::new();
-        let entries = std::fs::read_dir(&root)?;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if is_valid_skill_dir(&path) {
-                skill_dirs.push(path);
-            }
-        }
-
-        if skill_dirs.is_empty() {
-            return Ok(BatchImportResult {
-                imported: 0,
-                skipped: 0,
-                errors: vec![],
-            });
-        }
-
-        let total = skill_dirs.len();
-        let mut imported = 0usize;
-        let mut skipped = 0usize;
-        let mut errors = Vec::new();
-        let resolved = crate::core::canonical::resolve_user_root()?;
-
-        for (i, dir) in skill_dirs.iter().enumerate() {
-            let name = skill_metadata::infer_skill_name(dir);
-
-            app_handle
-                .emit(
-                    "batch-import-progress",
-                    serde_json::json!({
-                        "current": i + 1,
-                        "total": total,
-                        "name": &name,
-                    }),
-                )
-                .ok();
-
-            // Check if already imported by prospective canonical path
-            let prospective_central = resolved.root.join(&name);
-            let central_str = prospective_central.to_string_lossy().to_string();
-            if let Ok(Some(_)) = store.get_skill_by_central_path(&central_str) {
-                skipped += 1;
-                continue;
-            }
-
-            let install_result = (|| -> Result<String, AppError> {
-                let _lock =
-                    RepoLock::acquire_foreground("batch import skill").map_err(AppError::db)?;
-                let dest = crate::core::canonical::install_skill_dir_as(
-                    dir,
-                    &resolved,
-                    &name,
-                    false,
-                )?;
-                let meta = skill_metadata::parse_skill_md(&dest);
-                let hash =
-                    crate::core::content_hash::hash_directory(&dest).map_err(AppError::io)?;
-                let result = installer::InstallResult {
-                    name: name.clone(),
-                    description: meta.description,
-                    central_path: dest,
-                    content_hash: hash,
-                };
-                let metadata = InstallSourceMetadata {
-                    source_type: "local".to_string(),
-                    source_ref: Some(dir.to_string_lossy().to_string()),
-                    source_ref_resolved: None,
-                    source_subpath: None,
-                    source_branch: None,
-                    source_revision: None,
-                    remote_revision: None,
-                    update_status: "local_only".to_string(),
-                };
-                store_installed_skill_unlocked(&store, &result, &metadata, None)
-            })();
-
-            match install_result {
-                Ok(_) => imported += 1,
-                Err(e) => errors.push(format!("{}: {}", name, e)),
-            }
-        }
-
-        Ok(BatchImportResult {
-            imported,
-            skipped,
-            errors,
-        })
-    })
-    .await?
-}
-
 fn remove_path_if_exists(path: &Path) -> Result<(), AppError> {
     crate::core::staged::remove_path_if_exists(path)
 }

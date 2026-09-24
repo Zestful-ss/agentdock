@@ -43,14 +43,13 @@ jobs:
         run: |
           $cfg = @{
             bundle = @{
-              createUpdaterArtifacts = $false
               targets = @('nsis', 'msi')
             }
           } | ConvertTo-Json -Depth 5
           Set-Content -Path tauri.windows-build.json -Value $cfg -Encoding utf8
           Get-Content tauri.windows-build.json
 
-      - name: Build installers (NSIS + MSI, no updater artifacts)
+      - name: Build installers (NSIS + MSI)
         run: npx tauri build --target x86_64-pc-windows-msvc --config tauri.windows-build.json
 
       - name: Collect installers
@@ -72,7 +71,7 @@ jobs:
       - name: Upload installer artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: skills-manager-windows-installer
+          name: agentdock-windows-installer
           path: out/*
           retention-days: 30
           if-no-files-found: error

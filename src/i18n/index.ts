@@ -2,11 +2,10 @@ import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 import { getSettings } from "../lib/tauri";
 import zh from "./zh.json";
-import zhTW from "./zh-TW.json";
 import en from "./en.json";
 
 const LANGUAGE_STORAGE_KEY = "language";
-const SUPPORTED_LANGUAGES = ["zh", "zh-TW", "en"] as const;
+const SUPPORTED_LANGUAGES = ["zh", "en"] as const;
 type SupportedLanguage = (typeof SUPPORTED_LANGUAGES)[number];
 
 function isSupportedLanguage(lang: string | null): lang is SupportedLanguage {
@@ -37,9 +36,7 @@ function detectLanguage(): SupportedLanguage {
   for (const tag of tags) {
     const lower = tag.toLowerCase();
     if (isPrimary(lower, "zh")) {
-      // An explicit script wins over the region, so zh-Hans-HK stays Simplified.
-      if (lower.includes("hans")) return "zh";
-      return /hant|-(tw|hk|mo)\b/.test(lower) ? "zh-TW" : "zh";
+      return "zh";
     }
     if (isPrimary(lower, "en")) return "en";
   }
@@ -59,13 +56,10 @@ export const i18nReady = (async () => {
   await i18n.use(initReactI18next).init({
     resources: {
       zh: { translation: zh },
-      "zh-TW": { translation: zhTW },
       en: { translation: en },
     },
     lng,
-    // zh-TW is a partial locale, so it still falls back to Simplified
-    // Chinese. Everything else falls back to English.
-    fallbackLng: { "zh-TW": ["zh"], default: ["en"] },
+    fallbackLng: ["en"],
     interpolation: { escapeValue: false },
   });
 })();

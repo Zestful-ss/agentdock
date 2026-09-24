@@ -123,10 +123,14 @@ export function ProjectDetail() {
   const [deleteTarget, setDeleteTarget] = useState<ProjectSkillGroup | null>(null);
   const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false);
   const [batchTagDialogOpen, setBatchTagDialogOpen] = useState(false);
-  const PROJECT_ADD_CALLOUT_KEY = "skills-manager.projectAddCalloutDismissed";
+  const PROJECT_ADD_CALLOUT_KEY = "agentdock.projectAddCalloutDismissed";
+  const LEGACY_PROJECT_ADD_CALLOUT_KEY = "skills-manager.projectAddCalloutDismissed";
   const [showAddCallout, setShowAddCallout] = useState(() => {
     try {
-      return localStorage.getItem(PROJECT_ADD_CALLOUT_KEY) !== "1";
+      return (
+        localStorage.getItem(PROJECT_ADD_CALLOUT_KEY) ??
+        localStorage.getItem(LEGACY_PROJECT_ADD_CALLOUT_KEY)
+      ) !== "1";
     } catch {
       return false;
     }
