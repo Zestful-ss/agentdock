@@ -32,6 +32,10 @@ const checks = [
       prepareWorkflow.indexOf('validate-release-source') < prepareWorkflow.indexOf('Prepare release files'),
   ],
   [
+    'prepare release main-branch guard',
+    prepareWorkflow.includes('GITHUB_REF') && prepareWorkflow.includes('refs/heads/main'),
+  ],
+  [
     'workflow source alignment',
     workflow.includes('Zestful-ss/agentdock') && prepareWorkflow.includes('Zestful-ss/agentdock'),
   ],

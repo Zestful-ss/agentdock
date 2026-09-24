@@ -125,7 +125,10 @@ function updateChangelogDate(changelog, version, date) {
   if (!headingPattern.test(changelog)) {
     throw new Error(`Missing ${version} heading while updating release date`);
   }
-  return changelog.replace(headingPattern, `$1${date}`);
+  return changelog.replace(
+    headingPattern,
+    `## [${version}] - ${date}`,
+  );
 }
 
 function requireChangelogEntry(changelog, version, { zh = false, label = 'CHANGELOG.md' } = {}) {
