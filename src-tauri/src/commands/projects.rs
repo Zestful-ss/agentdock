@@ -566,11 +566,7 @@ pub async fn reorder_projects(
 }
 
 #[tauri::command]
-pub async fn scan_projects(
-    root: String,
-    store: State<'_, Arc<SkillStore>>,
-) -> Result<Vec<String>, AppError> {
-    let store = store.inner().clone();
+pub async fn scan_projects(root: String) -> Result<Vec<String>, AppError> {
     tauri::async_runtime::spawn_blocking(move || {
         let root_path = Path::new(&root);
         if !root_path.is_dir() {

@@ -1681,13 +1681,17 @@ fn install_skillssh_action(
             .map_err(map_app_err)?;
         if let Some(scenario_id) = active_scenario {
             store.add_skill_to_scenario(scenario_id, &skill_id)?;
-            sync_metadata::write_all_from_db_unlocked(store)?;
         }
         let central_path = install_result.central_path.to_string_lossy().to_string();
         Ok((skill_id, install_name, central_path))
     })();
     git_fetcher::cleanup_temp(&temp_dir);
     let (skill_id, install_name, central_path) = result?;
+    // The canonical registration writes metadata before the optional preset
+    // membership is added. Refresh it after releasing the operation lock.
+    if active_scenario.is_some() {
+        sync_metadata::write_all_from_db(store)?;
+    }
     Ok((skill_id, install_name, central_path, "skillssh".to_string()))
 }
 

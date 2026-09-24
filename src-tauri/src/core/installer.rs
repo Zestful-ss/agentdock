@@ -1,4 +1,6 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
+#[cfg(any(test, feature = "legacy-harness-deploy-tests"))]
+use anyhow::Context;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -240,6 +242,7 @@ fn safe_extract(archive: &mut zip::ZipArchive<std::fs::File>, dest: &Path) -> Re
 /// - Reuse an existing directory when it clearly belongs to the same skill
 ///   (same metadata `name`, or legacy no-metadata `<name>` directory).
 /// - Otherwise allocate `<name>-2`, `<name>-3`, ...
+#[cfg(any(test, feature = "legacy-harness-deploy-tests"))]
 fn unique_skill_dest(parent: &Path, sanitized_name: &str, source: &Path) -> Result<PathBuf> {
     let source_hash = content_hash::hash_directory(source)?;
 
