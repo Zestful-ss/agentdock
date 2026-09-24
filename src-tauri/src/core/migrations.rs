@@ -398,11 +398,12 @@ fn validate_identifier(name: &str) -> Result<()> {
 }
 
 fn table_exists(conn: &Connection, table: &str) -> Result<bool> {
-    conn.query_row(
+    let result = conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
         rusqlite::params![table],
         |row| row.get(0),
-    )
+    )?;
+    Ok(result)
 }
 
 fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
