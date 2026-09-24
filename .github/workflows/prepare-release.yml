@@ -50,10 +50,21 @@ jobs:
       - name: Commit and tag
         run: |
           VERSION=$(node -p "require('./package.json').version")
-          # The release script updates package/lock, Cargo files, all locales,
-          # changelogs, and (best effort) the star-history asset. Stage the
-          # complete generated set rather than maintaining a partial list here.
-          git add -A
+          # Keep the generated release set explicit. This workflow only
+          # prepares the version commit/tag; the separate release.yml owns
+          # build, signing, notarization, updater metadata, and publication.
+          git add \
+            CHANGELOG.md \
+            CHANGELOG-zh.md \
+            package.json \
+            package-lock.json \
+            src-tauri/tauri.conf.json \
+            src-tauri/Cargo.toml \
+            src-tauri/Cargo.lock \
+            src/i18n/en.json \
+            src/i18n/zh.json \
+            src/i18n/zh-TW.json \
+            assets/star-history.svg
           git diff --cached --check
           git commit -m "chore: bump version to ${VERSION}"
           git tag -a "v${VERSION}" -m "v${VERSION}"

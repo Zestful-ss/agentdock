@@ -322,6 +322,33 @@ pub fn install_skill_dir_as(
     Ok(dest)
 }
 
+/// Build a canonical user skill in a sibling stage without replacing the live
+/// directory yet. This is the safe preflight primitive for update/reimport
+/// flows that must inspect removals or obtain approval before the swap.
+pub fn stage_skill_dir_as(
+    source: &Path,
+    resolved: &ResolvedRoot,
+    name: &str,
+) -> Result<super::staged::StagedSkillDir, AppError> {
+    if !source.is_dir() {
+        return Err(AppError::not_found("Skill directory not found"));
+    }
+    if !skill_metadata::is_valid_skill_dir(source) {
+        return Err(AppError::invalid_input(
+            "Source directory does not contain SKILL.md",
+        ));
+    }
+    let clean = sanitize_component(name)?;
+    let dest = resolved.root.join(&clean);
+    validate_new_destination(resolved, &dest)?;
+    sync_engine::ensure_dst_not_inside_src(source, &dest)
+        .map_err(|e| AppError::invalid_input(e.to_string()))?;
+    if dest.exists() || is_link(&dest) {
+        validate_existing_skill(resolved, &dest)?;
+    }
+    super::staged::stage_skill_dir(source, &dest)
+}
+
 /// Delete a managed skill by name from a canonical root.
 pub fn delete_skill(resolved: &ResolvedRoot, skill_name: &str) -> Result<PathBuf, AppError> {
     let dest = skill_dir(resolved, skill_name)?;
@@ -675,15 +702,22 @@ fn migrate_one_legacy_skill(
 // Project scope intentionally has no records: it is pure filesystem.
 
 /// Registration data for a user-scope canonical skill.
+#[derive(Default)]
 pub struct UserSkillRegistration {
     pub name: String,
     pub description: Option<String>,
     pub central_path: PathBuf,
     pub content_hash: String,
-    /// e.g. `"adopted"`, `"migrated"`.
+    /// e.g. `"adopted"`, `"migrated"`, `"skillssh"`.
     pub source_type: String,
     /// Where it came from (harness path, legacy path); shown in MySkills.
     pub source_ref: Option<String>,
+    pub source_ref_resolved: Option<String>,
+    pub source_subpath: Option<String>,
+    pub source_branch: Option<String>,
+    pub source_revision: Option<String>,
+    pub remote_revision: Option<String>,
+    pub update_status: Option<String>,
 }
 
 /// Insert (or refresh) the `SkillStore` record for a canonical user skill.
@@ -696,11 +730,12 @@ pub fn register_user_skill(
     reg: &UserSkillRegistration,
 ) -> Result<String, AppError> {
     let central = reg.central_path.display().to_string();
+    let update_status = reg.update_status.as_deref().unwrap_or("local_only");
     if let Some(existing) = store
         .get_skill_by_central_path(&central)
         .map_err(AppError::db)?
     {
-        // Refresh the existing record in place (hash + adopted source);
+        // Refresh the existing record in place (hash + source metadata);
         // never duplicate it.
         store
             .update_skill_after_reinstall(
@@ -709,13 +744,13 @@ pub fn register_user_skill(
                 reg.description.as_deref(),
                 &reg.source_type,
                 reg.source_ref.as_deref(),
-                None,
-                None,
-                None,
-                None,
-                None,
+                reg.source_ref_resolved.as_deref(),
+                reg.source_subpath.as_deref(),
+                reg.source_branch.as_deref(),
+                reg.source_revision.as_deref(),
+                reg.remote_revision.as_deref(),
                 Some(&reg.content_hash),
-                "local_only",
+                update_status,
             )
             .map_err(AppError::db)?;
         super::sync_metadata::write_all_from_db_unlocked(store).map_err(AppError::db)?;
@@ -730,6 +765,22 @@ pub fn register_user_skill(
         .into_iter()
         .find(|r| super::paths::identity_key(Path::new(&r.central_path)) == identity);
     if let Some(record) = same_dir {
+        store
+            .update_skill_after_reinstall(
+                &record.id,
+                &reg.name,
+                reg.description.as_deref(),
+                &reg.source_type,
+                reg.source_ref.as_deref(),
+                reg.source_ref_resolved.as_deref(),
+                reg.source_subpath.as_deref(),
+                reg.source_branch.as_deref(),
+                reg.source_revision.as_deref(),
+                reg.remote_revision.as_deref(),
+                Some(&reg.content_hash),
+                update_status,
+            )
+            .map_err(AppError::db)?;
         store
             .update_skill_central_path(&record.id, &central, Some(&reg.content_hash))
             .map_err(AppError::db)?;
@@ -746,18 +797,18 @@ pub fn register_user_skill(
             description: reg.description.clone(),
             source_type: reg.source_type.clone(),
             source_ref: reg.source_ref.clone(),
-            source_ref_resolved: None,
-            source_subpath: None,
-            source_branch: None,
-            source_revision: None,
-            remote_revision: None,
+            source_ref_resolved: reg.source_ref_resolved.clone(),
+            source_subpath: reg.source_subpath.clone(),
+            source_branch: reg.source_branch.clone(),
+            source_revision: reg.source_revision.clone(),
+            remote_revision: reg.remote_revision.clone(),
             central_path: central,
             content_hash: Some(reg.content_hash.clone()),
             enabled: true,
             created_at: now,
             updated_at: now,
             status: "ok".to_string(),
-            update_status: "local_only".to_string(),
+            update_status: update_status.to_string(),
             last_checked_at: Some(now),
             last_check_error: None,
         })
@@ -1018,8 +1069,14 @@ mod tests {
                 description: Some("desc".to_string()),
                 central_path: dir.clone(),
                 content_hash: hash.clone(),
-                source_type: "adopted".to_string(),
-                source_ref: Some("/harness/other".to_string()),
+                source_type: "skillssh".to_string(),
+                source_ref: Some("owner/repo/skill".to_string()),
+                source_ref_resolved: Some("https://example.test/repo.git".to_string()),
+                source_subpath: Some("skills/skill".to_string()),
+                source_branch: Some("main".to_string()),
+                source_revision: Some("rev-1".to_string()),
+                remote_revision: Some("rev-1".to_string()),
+                update_status: Some("up_to_date".to_string()),
             },
         )
         .unwrap();
@@ -1031,13 +1088,24 @@ mod tests {
                 description: Some("desc".to_string()),
                 central_path: dir.clone(),
                 content_hash: hash.clone(),
-                source_type: "adopted".to_string(),
-                source_ref: Some("/harness/other".to_string()),
+                source_type: "skillssh".to_string(),
+                source_ref: Some("owner/repo/skill".to_string()),
+                source_ref_resolved: Some("https://example.test/repo.git".to_string()),
+                source_subpath: Some("skills/skill".to_string()),
+                source_branch: Some("main".to_string()),
+                source_revision: Some("rev-1".to_string()),
+                remote_revision: Some("rev-1".to_string()),
+                update_status: Some("up_to_date".to_string()),
             },
         )
         .unwrap();
         assert_eq!(id, id2);
         assert_eq!(store.get_all_skills().unwrap().len(), 1);
+        let record = store.get_skill_by_id(&id).unwrap().unwrap();
+        assert_eq!(record.source_type, "skillssh");
+        assert_eq!(record.source_subpath.as_deref(), Some("skills/skill"));
+        assert_eq!(record.remote_revision.as_deref(), Some("rev-1"));
+        assert_eq!(record.update_status, "up_to_date");
 
         let removed = remove_user_skill_records(&store, &dir).unwrap();
         assert_eq!(removed, 1);

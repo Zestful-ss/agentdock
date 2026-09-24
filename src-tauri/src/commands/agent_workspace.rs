@@ -249,6 +249,7 @@ fn import_agent_local_skill_to_center(
                 content_hash: hash,
                 source_type: "adopted".to_string(),
                 source_ref: Some(source_path.display().to_string()),
+                ..Default::default()
             },
         )
         .map_err(anyhow::Error::from)?;

@@ -140,6 +140,7 @@ pub async fn import_existing_skill(
                     content_hash: hash,
                     source_type: "import".to_string(),
                     source_ref: Some(source_path),
+                    ..Default::default()
                 },
             )
             .map_err(anyhow::Error::from)?;
@@ -213,6 +214,7 @@ pub async fn import_all_discovered(store: State<'_, Arc<SkillStore>>) -> Result<
                             content_hash: hash,
                             source_type: "import".to_string(),
                             source_ref: Some(first.found_path.clone()),
+                            ..Default::default()
                         },
                     )
                     .map_err(anyhow::Error::from)?;

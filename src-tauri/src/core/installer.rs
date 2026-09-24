@@ -2,10 +2,10 @@ use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-use super::central_repo;
 use super::content_hash;
 use super::skill_metadata::{self, sanitize_skill_name};
-use super::sync_engine;
+#[cfg(any(test, feature = "legacy-harness-deploy-tests"))]
+use super::{central_repo, sync_engine};
 
 pub struct InstallResult {
     pub name: String,
@@ -96,6 +96,7 @@ pub fn prepare_local_source(source: &Path) -> Result<PreparedLocal> {
     PreparedSource::open(source).map(|inner| PreparedLocal { inner })
 }
 
+#[cfg(any(test, feature = "legacy-harness-deploy-tests"))]
 pub fn install_from_local(source: &Path, name: Option<&str>) -> Result<InstallResult> {
     let prepared = PreparedSource::open(source)?;
     let skill_dir = prepared.skill_dir();
@@ -117,6 +118,7 @@ pub fn install_from_local(source: &Path, name: Option<&str>) -> Result<InstallRe
     install_skill_dir_to_destination(skill_dir, &final_name, &dest)
 }
 
+#[cfg(any(test, feature = "legacy-harness-deploy-tests"))]
 pub fn install_from_local_to_destination(
     source: &Path,
     name: Option<&str>,
@@ -160,6 +162,7 @@ pub fn hash_local_source_eol_insensitive(source: &Path) -> Result<String> {
     content_hash::hash_directory_eol_insensitive(prepared.skill_dir())
 }
 
+#[cfg(any(test, feature = "legacy-harness-deploy-tests"))]
 pub fn install_skill_dir_to_destination(
     source: &Path,
     name: &str,

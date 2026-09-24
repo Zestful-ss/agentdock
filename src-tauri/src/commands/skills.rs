@@ -113,6 +113,36 @@ pub(crate) fn pending_removals_for(
     Ok(pending)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpdateContentState {
+    Unchanged,
+    RemoteChanged,
+    LocalModified,
+    Conflict,
+    Unknown,
+}
+
+/// Classify an update using both baselines. The DB hash is the last accepted
+/// source content, the live hash is what the user currently has, and the
+/// remote hash is the newly fetched source. A remote-only change is safe to
+/// apply; either kind of local divergence is a conflict, even when the remote
+/// did not move.
+fn classify_update_content(
+    recorded_hash: Option<&str>,
+    live_hash: &str,
+    remote_hash: &str,
+) -> UpdateContentState {
+    let Some(recorded_hash) = recorded_hash else {
+        return UpdateContentState::Unknown;
+    };
+    match (live_hash == recorded_hash, remote_hash == recorded_hash) {
+        (true, true) => UpdateContentState::Unchanged,
+        (true, false) => UpdateContentState::RemoteChanged,
+        (false, true) => UpdateContentState::LocalModified,
+        (false, false) => UpdateContentState::Conflict,
+    }
+}
+
 /// Refuse a replacement when the live canonical copy no longer matches the
 /// hash recorded in the index. The DB is an index; direct user edits must not
 /// be overwritten merely because the remote/source changed.
@@ -1838,16 +1868,8 @@ pub async fn relink_local_skill_source(
         let result = (|| -> Result<(Vec<PendingRemoval>, Option<String>), AppError> {
             let _lock = RepoLock::acquire_foreground("relink local skill").map_err(AppError::db)?;
             ensure_live_skill_unchanged(&skill)?;
-            let staged_path = staged_path_for(&skill.central_path);
-            let install_result = installer::install_from_local_to_destination(
-                &path,
-                Some(&skill.name),
-                &staged_path,
-            )
-            .inspect_err(|_| {
-                let _ = remove_path_if_exists(&staged_path);
-            })
-            .map_err(AppError::io)?;
+            let install_result = stage_user_skill_install(&path, &skill.name)?;
+            let staged_path = install_result.central_path.clone();
             let staged_guard = StagedPathGuard::new(&staged_path, true);
 
             // Picking a new source says which source to follow. It does not say
@@ -2087,37 +2109,54 @@ pub fn update_git_skill_internal(
 
         let new_hash = crate::core::content_hash::hash_directory_strict(&skill_dir)
             .map_err(AppError::io)?;
-        let content_changed = skill.content_hash.as_deref() != Some(new_hash.as_str());
         let source_subpath = git_fetcher::relative_subpath(&temp_dir, &skill_dir);
         let _lock = RepoLock::acquire_foreground("update installed skill").map_err(AppError::db)?;
 
-        // The DB hash is an index value, not proof that the live managed copy
-        // is unchanged. Refuse to overwrite edits made directly in the
-        // canonical directory; the user must explicitly resolve that conflict
-        // instead of losing work during an update.
-        if content_changed {
-            ensure_live_skill_unchanged(&skill)?;
+        // Compare the remote against both the indexed baseline and the live
+        // canonical copy. A local edit is a conflict even when the remote did
+        // not move; silently reporting that case as up-to-date hides a real
+        // divergence from the user.
+        let live_hash = content_hash::hash_directory_strict(Path::new(&skill.central_path))
+            .map_err(AppError::io)?;
+        let update_state = classify_update_content(
+            skill.content_hash.as_deref(),
+            &live_hash,
+            &new_hash,
+        );
+        if matches!(
+            update_state,
+            UpdateContentState::LocalModified | UpdateContentState::Conflict
+        ) {
+            return Err(AppError::invalid_input(
+                "Managed skill was modified locally; update was not applied",
+            ));
         }
+        let content_changed = match update_state {
+            UpdateContentState::Unchanged => false,
+            UpdateContentState::RemoteChanged => true,
+            // Legacy rows may not have a recorded hash. Preserve the previous
+            // behavior for them, while still refusing any detectable local edit.
+            UpdateContentState::Unknown => skill.content_hash.as_deref() != Some(new_hash.as_str()),
+            UpdateContentState::LocalModified | UpdateContentState::Conflict => unreachable!(),
+        };
 
         // Stage first, then compare. The tree that lands in the library is the
-        // installer's output, not the raw checkout — it drops `.git` and every
-        // symlink — so comparing against the checkout would report a path as
-        // surviving that the swap then removes.
-        let staged_path = staged_path_for(&skill.central_path);
+        // canonical installer's output, not the raw checkout — it drops `.git`
+        // and every symlink — so comparing against the checkout would report a
+        // path as surviving that the swap then removes.
         let install_result = if content_changed {
-            Some(
-                installer::install_skill_dir_to_destination(&skill_dir, &skill.name, &staged_path)
-                    .inspect_err(|_| {
-                        let _ = remove_path_if_exists(&staged_path);
-                    })
-                    .map_err(AppError::io)?,
-            )
+            Some(stage_user_skill_install(&skill_dir, &skill.name)?)
         } else {
             None
         };
-        let staged_guard = StagedPathGuard::new(&staged_path, install_result.is_some());
+        let staged_path = install_result
+            .as_ref()
+            .map(|result| result.central_path.clone());
+        let staged_guard = staged_path
+            .as_ref()
+            .map(|path| StagedPathGuard::new(path.as_path(), true));
 
-        let pending = pending_removals_for(store, &skill, install_result.is_some().then_some(staged_path.as_path()))?;
+        let pending = pending_removals_for(store, &skill, staged_path.as_deref())?;
 
         // A confirmation answers one exact question: this revision, this list
         // as shown. It closes the window while the dialog is open — a push, or
@@ -2147,10 +2186,15 @@ pub fn update_git_skill_internal(
         }
 
         if let Some(install_result) = install_result {
-            swap_skill_directory(&staged_path, Path::new(&skill.central_path))?;
+            let staged_path = staged_path
+                .as_deref()
+                .ok_or_else(|| AppError::internal("missing staged skill path"))?;
+            swap_skill_directory(staged_path, Path::new(&skill.central_path))?;
             // Only now is it the library's. Releasing before the swap left the
             // staged directory behind whenever its first rename failed.
-            staged_guard.release();
+            if let Some(guard) = staged_guard.as_ref() {
+                guard.release();
+            }
 
             store
                 .update_skill_source_metadata(
@@ -2394,13 +2438,8 @@ pub fn set_git_source_internal(
         // copy exactly the set of files `content_hash` covers, so the rewrite
         // could alter files while still reporting `content_changed: false`.
         let description = if content_changed {
-            let staged_path = staged_path_for(&skill.central_path);
-            let install_result =
-                installer::install_skill_dir_to_destination(&skill_dir, &skill.name, &staged_path)
-                    .inspect_err(|_| {
-                        let _ = std::fs::remove_dir_all(&staged_path);
-                    })
-                    .map_err(AppError::io)?;
+            let install_result = stage_user_skill_install(&skill_dir, &skill.name)?;
+            let staged_path = install_result.central_path.clone();
             swap_skill_directory(&staged_path, Path::new(&skill.central_path))?;
             install_result.description
         } else {
@@ -2518,13 +2557,8 @@ pub fn reimport_local_skill_internal(
     let result = (|| -> Result<(Vec<PendingRemoval>, Option<String>), AppError> {
         let _lock = RepoLock::acquire_foreground("reimport local skill").map_err(AppError::db)?;
         ensure_live_skill_unchanged(&skill)?;
-        let staged_path = staged_path_for(&skill.central_path);
-        let install_result =
-            installer::install_from_local_to_destination(&path, Some(&skill.name), &staged_path)
-                .inspect_err(|_| {
-                    let _ = remove_path_if_exists(&staged_path);
-                })
-                .map_err(AppError::io)?;
+        let install_result = stage_user_skill_install(&path, &skill.name)?;
+        let staged_path = install_result.central_path.clone();
         let staged_guard = StagedPathGuard::new(&staged_path, true);
 
         // Same replacement, same guard. Re-importing is explicit about the
@@ -3108,8 +3142,19 @@ pub fn resolve_skillssh_install_target(
     Ok((name, destination))
 }
 
-pub fn staged_path_for(central_path: &str) -> PathBuf {
-    crate::core::staged::staged_sibling_for(Path::new(central_path))
+fn stage_user_skill_install(
+    source: &Path,
+    name: &str,
+) -> Result<installer::InstallResult, AppError> {
+    let resolved = canonical::resolve_user_root()?;
+    let staged = canonical::stage_skill_dir_as(source, &resolved, name)?;
+    let metadata = skill_metadata::parse_skill_md(&staged.path);
+    Ok(installer::InstallResult {
+        name: name.to_string(),
+        description: metadata.description,
+        central_path: staged.path,
+        content_hash: staged.hash,
+    })
 }
 
 pub fn swap_skill_directory(staged_path: &Path, current_path: &Path) -> Result<(), AppError> {
@@ -3407,6 +3452,30 @@ mod tests {
             last_checked_at: None,
             last_check_error: None,
         }
+    }
+
+    #[test]
+    fn update_content_state_distinguishes_remote_and_local_changes() {
+        assert_eq!(
+            classify_update_content(Some("base"), "base", "base"),
+            UpdateContentState::Unchanged
+        );
+        assert_eq!(
+            classify_update_content(Some("base"), "base", "remote"),
+            UpdateContentState::RemoteChanged
+        );
+        assert_eq!(
+            classify_update_content(Some("base"), "local", "base"),
+            UpdateContentState::LocalModified
+        );
+        assert_eq!(
+            classify_update_content(Some("base"), "local", "remote"),
+            UpdateContentState::Conflict
+        );
+        assert_eq!(
+            classify_update_content(None, "local", "remote"),
+            UpdateContentState::Unknown
+        );
     }
 
     #[test]
@@ -3912,6 +3981,113 @@ mod tests {
         skill.source_revision = Some("old-rev".to_string());
         skill.update_status = "unknown".to_string();
         store.insert_skill(&skill).unwrap();
+    }
+
+    fn file_url(path: &Path) -> String {
+        let raw = path.display().to_string().replace('\\', "/");
+        if raw.starts_with('/') {
+            format!("file://{raw}")
+        } else {
+            format!("file:///{raw}")
+        }
+    }
+
+    fn init_single_skill_git_repo(base: &Path) -> PathBuf {
+        let repo = base.join("git-update-source");
+        fs::create_dir_all(&repo).unwrap();
+        fs::write(
+            repo.join("SKILL.md"),
+            "---\nname: git-update\n---\nremote v1\n",
+        )
+        .unwrap();
+        git_cli(&repo, &["init"]);
+        git_cli(&repo, &["config", "user.email", "test@example.test"]);
+        git_cli(&repo, &["config", "user.name", "test"]);
+        git_cli(&repo, &["config", "commit.gpgsign", "false"]);
+        git_cli(&repo, &["add", "-A"]);
+        git_cli(&repo, &["commit", "-m", "v1"]);
+        repo
+    }
+
+    fn insert_git_update_fixture(repo: &TestRepo, source: &Path) -> String {
+        let central = write_skill_dir("git-update");
+        let mut skill = sample_skill("git-update", "git-update", &central);
+        let url = file_url(source);
+        skill.source_type = "git".to_string();
+        skill.source_ref = Some(url.clone());
+        skill.source_ref_resolved = Some(url);
+        skill.content_hash = Some(content_hash::hash_directory(&central).unwrap());
+        skill.update_status = "unknown".to_string();
+        repo.store.insert_skill(&skill).unwrap();
+        "git-update".to_string()
+    }
+
+    #[test]
+    fn git_update_applies_remote_change_when_local_copy_is_unchanged() {
+        let repo = test_repo();
+        let source = init_single_skill_git_repo(repo._tmp.path());
+        let id = insert_git_update_fixture(&repo, &source);
+
+        fs::write(
+            source.join("SKILL.md"),
+            "---\nname: git-update\n---\nremote v2\n",
+        )
+        .unwrap();
+        git_cli(&source, &["add", "-A"]);
+        git_cli(&source, &["commit", "-m", "v2"]);
+
+        let result = update_git_skill_internal(&repo.store, &id, None, None, None).unwrap();
+        assert!(result.content_changed);
+        let central = central_repo::skills_dir().join("git-update");
+        assert!(fs::read_to_string(central.join("SKILL.md"))
+            .unwrap()
+            .contains("remote v2"));
+    }
+
+    #[test]
+    fn git_update_rejects_local_edit_even_when_remote_is_unchanged() {
+        let repo = test_repo();
+        let source = init_single_skill_git_repo(repo._tmp.path());
+        let id = insert_git_update_fixture(&repo, &source);
+        let central = central_repo::skills_dir().join("git-update");
+        fs::write(
+            central.join("SKILL.md"),
+            "---\nname: git-update\n---\nlocal edit\n",
+        )
+        .unwrap();
+
+        let error = update_git_skill_internal(&repo.store, &id, None, None, None).unwrap_err();
+        assert!(error.message.contains("modified locally"));
+        assert!(fs::read_to_string(central.join("SKILL.md"))
+            .unwrap()
+            .contains("local edit"));
+    }
+
+    #[test]
+    fn git_update_rejects_both_remote_and_local_changes() {
+        let repo = test_repo();
+        let source = init_single_skill_git_repo(repo._tmp.path());
+        let id = insert_git_update_fixture(&repo, &source);
+        let central = central_repo::skills_dir().join("git-update");
+
+        fs::write(
+            central.join("SKILL.md"),
+            "---\nname: git-update\n---\nlocal edit\n",
+        )
+        .unwrap();
+        fs::write(
+            source.join("SKILL.md"),
+            "---\nname: git-update\n---\nremote v2\n",
+        )
+        .unwrap();
+        git_cli(&source, &["add", "-A"]);
+        git_cli(&source, &["commit", "-m", "v2"]);
+
+        let error = update_git_skill_internal(&repo.store, &id, None, None, None).unwrap_err();
+        assert!(error.message.contains("modified locally"));
+        assert!(fs::read_to_string(central.join("SKILL.md"))
+            .unwrap()
+            .contains("local edit"));
     }
 
     fn prefetch(url: &str, revision: &str) -> Option<PrefetchedRemote> {
