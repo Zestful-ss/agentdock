@@ -1,8 +1,6 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use tauri::Manager;
-
 pub mod commands;
 pub mod core;
 

@@ -165,9 +165,9 @@ pub async fn adopt_skill_to_user(
                         let live = content_hash::hash_directory_strict(&candidate)
                             .map_err(AppError::io)?;
                         if live != baseline {
-                            return Err(AppError::invalid_input(
+                            return Err(anyhow::Error::from(AppError::invalid_input(
                                 "Managed skill was modified locally; replacement was not applied",
-                            ));
+                            )));
                         }
                     }
                 }
