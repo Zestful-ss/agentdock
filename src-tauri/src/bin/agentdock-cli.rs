@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use anyhow::{Context, anyhow, bail};
+use anyhow::{anyhow, bail};
 use app_lib::commands::{
     inventory as inventory_cmd, presets as preset_cmd, skills as cmd, tools as tool_cmd,
 };

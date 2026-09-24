@@ -336,6 +336,7 @@ fn migrate_v8_to_v9(conn: &Connection) -> Result<()> {
             "DELETE FROM settings WHERE key IN (
                 'git_backup_remote_url',
                 'git_backup_engine',
+                'github_auth_method',
                 'backup_device_name',
                 'backup_auto_enabled',
                 'backup_last_auto_error',

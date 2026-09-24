@@ -1471,7 +1471,7 @@ fn match_known_ref(path: &str, known: &[String]) -> Option<(String, Option<Strin
             || path
                 .strip_prefix(name.as_str())
                 .is_some_and(|rest| rest.starts_with('/'));
-        if matches && best.is_none_or(|b: &str| name.len() > b.len()) {
+        if matches && best.map_or(true, |b: &str| name.len() > b.len()) {
             best = Some(name);
         }
     }
