@@ -113,7 +113,7 @@ pub fn connect_backup_repo(
                     "name": repo_name,
                     "private": true,
                     "auto_init": false,
-                    "description": "Skills Manager backup",
+                    "description": "AgentDock backup",
                 }))
                 .send()
                 .context("GITHUB_NETWORK: could not reach api.github.com")?;

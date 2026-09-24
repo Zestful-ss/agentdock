@@ -1232,8 +1232,13 @@ pub fn size_report(skills_dir: &Path) -> Result<BackupSizeReport> {
     })
 }
 
-const OVERSIZED_SECTION_BEGIN: &str = "# skills-manager: oversized skills excluded from backup (auto-managed)";
-const OVERSIZED_SECTION_END: &str = "# skills-manager: end oversized skills";
+const OVERSIZED_SECTION_BEGIN: &str = "# agentdock: oversized skills excluded from backup (auto-managed)";
+const OVERSIZED_SECTION_END: &str = "# agentdock: end oversized skills";
+// Keep recognizing the pre-rename markers so an upgrade does not leave a
+// second managed section in an existing repository's .gitignore.
+const LEGACY_OVERSIZED_SECTION_BEGIN: &str =
+    "# skills-manager: oversized skills excluded from backup (auto-managed)";
+const LEGACY_OVERSIZED_SECTION_END: &str = "# skills-manager: end oversized skills";
 
 /// Escape a repo-relative path for use as a literal gitignore pattern.
 fn gitignore_escape(path: &str) -> String {
@@ -1310,12 +1315,13 @@ fn rewrite_gitignore_section(skills_dir: &Path, section_lines: &[String]) -> Res
     let mut in_section = false;
     let mut had_section = false;
     for line in existing.lines() {
-        if line.trim() == OVERSIZED_SECTION_BEGIN {
+        let trimmed = line.trim();
+        if trimmed == OVERSIZED_SECTION_BEGIN || trimmed == LEGACY_OVERSIZED_SECTION_BEGIN {
             in_section = true;
             had_section = true;
             continue;
         }
-        if line.trim() == OVERSIZED_SECTION_END {
+        if trimmed == OVERSIZED_SECTION_END || trimmed == LEGACY_OVERSIZED_SECTION_END {
             in_section = false;
             continue;
         }

@@ -93,6 +93,9 @@ jobs:
       - name: Check i18n references
         run: node scripts/find_dead_i18n.cjs
 
+      - name: Check AgentDock migration configuration
+        run: npm run check:rename
+
   # Linux is otherwise only compiled by the release workflow (tag push), so a
   # Linux-only compile break — e.g. the keyring secret-service backend with
   # its vendored libdbus build — would surface at release time. A cargo check

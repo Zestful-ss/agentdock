@@ -1,6 +1,6 @@
 ---
 name: manage-skills
-description: Manage the user's canonical agent-skill library (~/.agents/skills and <repo>/.agents/skills) via skills-manager-cli — install, update, remove, curate presets, organize tags, search, and adopt existing skills. Use this whenever the user wants a skill added or removed from the library, wants presets/tags organized, or asks what is installed. Harnesses are discovery sources only; do not write into harness-specific folders.
+description: Manage the user's canonical agent-skill library (~/.agents/skills and <repo>/.agents/skills) via agentdock-cli — install, update, remove, curate presets, organize tags, search, and adopt existing skills. Use this whenever the user wants a skill added or removed from the library, wants presets/tags organized, or asks what is installed. Harnesses are discovery sources only; do not write into harness-specific folders.
 ---
 
 ## Before doing anything
@@ -9,14 +9,25 @@ description: Manage the user's canonical agent-skill library (~/.agents/skills a
    shell):
 
    ```bash
-   D="$HOME/.skills-manager/bin"
-   B="$D/skills-manager-cli"; [ -e "$B" ] || B="$B.exe"   # .exe on Windows
-   if [ -s "$D/.version" ] && [ -x "$B" ]; then
-     echo "$B"
-   elif [ -s "$D/.version" ] || [ -e "$B" ]; then
+   D="$HOME/.skills-manager/bin"  # legacy storage root, retained for compatibility
+   B="$D/agentdock-cli"; [ -e "$B" ] || B="$D/agentdock-cli.exe"
+   LEGACY="$D/skills-manager-cli"; [ -e "$LEGACY" ] || LEGACY="$D/skills-manager-cli.exe"
+   if [ -e "$B" ]; then
+     if [ -s "$D/.version" ] && [ -x "$B" ]; then
+       echo "$B"
+     else
+       echo BRIDGE_BROKEN
+     fi
+   elif [ -e "$LEGACY" ]; then
+     if [ -s "$D/.version" ] && [ -x "$LEGACY" ]; then
+       echo "$LEGACY"
+     else
+       echo BRIDGE_BROKEN
+     fi
+   elif [ -s "$D/.version" ]; then
      echo BRIDGE_BROKEN
    else
-     P="$(command -v skills-manager-cli 2>/dev/null || true)"
+     P="$(command -v agentdock-cli 2>/dev/null || command -v skills-manager-cli 2>/dev/null || true)"
      [ -x "$P" ] && echo "$P"
    fi
    ```
@@ -35,14 +46,14 @@ description: Manage the user's canonical agent-skill library (~/.agents/skills a
      what a copy that failed half-way leaves. **Stop.** Do not go looking
      for another CLI: that binary may predate a safety fix, and the machine has
      a desktop app whose version nothing here can match. Ask the user to open
-     the Skills Manager app once, which republishes it.
+     the AgentDock app once, which republishes it.
    - **A path from PATH** — nothing was ever published here, so there is no
      stale copy to worry about: this is a CLI-only machine (a server install, a
      standalone download, a hand-built binary). Use it, but note it can be
      older than a desktop app if one is also installed.
 
    If nothing is printed at all, this skill doesn't apply — fall back to
-   find-skills, or tell the user to install Skills Manager.
+   find-skills, or tell the user to install AgentDock.
 2. **Always pass `--json` when you parse output yourself.** Pretty-printed output is for the user; JSON is for you. Errors include `ok=false`, a stable `code`, and `message` on stderr with a non-zero exit code.
 
 ```bash
@@ -54,7 +65,7 @@ description: Manage the user's canonical agent-skill library (~/.agents/skills a
 V1 writes skills only into the canonical roots — user `~/.agents/skills/` and project `<repo>/.agents/skills/` — not into harness-specific folders. Harnesses are discovery sources (Inventory / MCP observe them); they are not deployment targets. Each skill has source metadata, preset membership, tags, and a canonical location. A **preset** is a reusable curation group; several presets may be members at the same time.
 
 Keep these three states separate:
-- **Library**: install/remove controls whether Skills Manager owns the skill under `.agents`.
+- **Library**: install/remove controls whether AgentDock owns the skill under `.agents`.
 - **Preset membership**: `presets add-skill/remove-skill` organizes the library only (curation, not disk sync).
 - **Harness observation**: Inventory / agents list report what a harness already sees; they never write into harness dirs.
 

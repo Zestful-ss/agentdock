@@ -14,8 +14,6 @@ if (!releaseArg) {
   process.exit(1);
 }
 
-const dateStr = new Date().toISOString().slice(0, 10);
-
 const packagePath = path.join(root, 'package.json');
 const packageLockPath = path.join(root, 'package-lock.json');
 const tauriConfPath = path.join(root, 'src-tauri', 'tauri.conf.json');
@@ -90,9 +88,9 @@ function updateCargoPackageVersion(cargoToml, nextVersion) {
 }
 
 function updateCargoLockVersion(cargoLock, nextVersion) {
-  const packagePattern = /(\[\[package\]\]\nname = "skills-manager"\nversion = ")[^"]+("\n)/;
+  const packagePattern = /(\[\[package\]\]\r?\nname = "agentdock"\r?\nversion = ")[^"]+("\r?\n)/;
   if (!packagePattern.test(cargoLock)) {
-    throw new Error('Missing skills-manager package entry in src-tauri/Cargo.lock');
+    throw new Error('Missing agentdock package entry in src-tauri/Cargo.lock');
   }
   return cargoLock.replace(
     packagePattern,
@@ -100,24 +98,40 @@ function updateCargoLockVersion(cargoLock, nextVersion) {
   );
 }
 
-function ensureChangelogEntry(changelog, nextVersion, { zh = false } = {}) {
-  const heading = `## [${nextVersion}] - ${dateStr}`;
-  if (changelog.includes(heading) || changelog.includes(`## [${nextVersion}] -`)) {
-    return changelog;
+function requireChangelogEntry(changelog, version, { zh = false, label = 'CHANGELOG.md' } = {}) {
+  const escapedVersion = version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const headingPattern = new RegExp(`^## \\[${escapedVersion}\\](?: - .*)?$`, 'm');
+  const match = headingPattern.exec(changelog);
+  if (!match) {
+    throw new Error(`Missing ${label} release notes for ${version}; add a complete section before preparing the release`);
   }
 
-  const sections = zh
-    ? ['### 发布概览', '- ', '', '### 用户可见更新', '- ', '', '### 开发者与治理更新', '- ']
-    : ['### Release Overview', '- ', '', '### User-facing', '- ', '', '### Developer & Governance', '- '];
-
-  const entry = [heading, '', ...sections, ''].join('\n');
-
-  const firstReleaseHeading = changelog.search(/^## \[/m);
-  if (firstReleaseHeading === -1) {
-    return `${changelog.trimEnd()}\n\n${entry}\n`;
+  const afterHeading = changelog.slice(match.index + match[0].length);
+  const nextHeading = afterHeading.search(/^## \[/m);
+  const section = nextHeading === -1 ? afterHeading : afterHeading.slice(0, nextHeading);
+  const headings = zh
+    ? ['### 发布概览', '### 用户可见更新', '### 开发者与治理更新']
+    : ['### Release Overview', '### User-facing', '### Developer & Governance'];
+  for (const heading of headings) {
+    if (!section.includes(heading)) {
+      throw new Error(`${label} section ${version} is missing ${heading}`);
+    }
   }
 
-  return `${changelog.slice(0, firstReleaseHeading)}${entry}${changelog.slice(firstReleaseHeading)}`;
+  const hasContent = section
+    .split('\n')
+    .some((line) => line.trim() && !line.startsWith('#') && line.trim() !== '-');
+  if (!hasContent) {
+    throw new Error(`${label} section ${version} contains only placeholders; add release notes before preparing the release`);
+  }
+
+  const nextVersionHeading = changelog.search(/^## \[(?!(?:Unreleased|未发布)\])/m);
+  const unreleased = nextVersionHeading === -1 ? changelog : changelog.slice(0, nextVersionHeading);
+  if (/AgentDock/i.test(unreleased) && !/AgentDock/i.test(section)) {
+    throw new Error(`${label} section ${version} does not carry the pending AgentDock rename note`);
+  }
+
+  return changelog;
 }
 
 // Refresh the README star-history snapshot. Best-effort: a failure here (no gh
@@ -157,8 +171,11 @@ function main() {
   updateSettingsVersion(en, nextVersion, 'src/i18n/en.json');
   updateSettingsVersion(zh, nextVersion, 'src/i18n/zh.json');
   updateSettingsVersion(zhTw, nextVersion, 'src/i18n/zh-TW.json');
-  const nextChangelog = ensureChangelogEntry(changelog, nextVersion);
-  const nextChangelogZh = ensureChangelogEntry(changelogZh, nextVersion, { zh: true });
+  const nextChangelog = requireChangelogEntry(changelog, nextVersion, { label: 'CHANGELOG.md' });
+  const nextChangelogZh = requireChangelogEntry(changelogZh, nextVersion, {
+    zh: true,
+    label: 'CHANGELOG-zh.md',
+  });
 
   if (dryRun) {
     console.log(`[dry-run] ${currentVersion} -> ${nextVersion}`);

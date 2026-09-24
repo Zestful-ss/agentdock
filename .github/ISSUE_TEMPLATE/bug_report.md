@@ -1,6 +1,6 @@
 ---
 name: Bug report / Bug 反馈
-about: Report a problem with Skills Manager / 反馈 Skills Manager 的问题
+about: Report a problem with AgentDock / 反馈 AgentDock 的问题
 title: ""
 labels: bug
 assignees: ""
@@ -17,11 +17,11 @@ A short description and steps to reproduce, if possible. Screenshots are welcome
 ## Diagnostics / 诊断信息
 
 <!--
-In Skills Manager → Settings → About, click "Report Issue".
+In AgentDock → Settings → About, click "Report Issue".
 It copies app version, OS, central repo path, AND a recent log excerpt to the clipboard.
 Paste it here (Ctrl+V / Cmd+V).
 
-打开 Skills Manager → 设置 → 关于，点「报告问题」按钮，
+打开 AgentDock → 设置 → 关于，点「报告问题」按钮，
 应用会自动复制版本号、系统信息、中央仓库路径和最近日志摘要到剪贴板，直接粘贴到这里即可。
 -->
 

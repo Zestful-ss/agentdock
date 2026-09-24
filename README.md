@@ -2,14 +2,18 @@
   <img src="assets/icon.png" width="80" />
 </p>
 
-<h1 align="center">Skills Manager</h1>
+<h1 align="center">AgentDock</h1>
 
 <p align="center">
-  Manage <code>.agents</code>; observe Harnesses.
+  Manage Agent skills and MCP; observe Harnesses.
 </p>
 
 <p align="center">
   <strong><a href="https://skillsmanager.dev">skillsmanager.dev</a></strong>
+</p>
+
+<p align="center">
+  <small>Compatibility: existing metadata stays under <code>~/.skills-manager</code>; the historical <code>skills-manager-cli</code> executable remains available as an alias during the transition. The GitHub repository, website, and package/cask URLs remain on their existing identifiers until those external services are renamed; the release workflow refuses tags from a different repository.</small>
 </p>
 
 <p align="center">
@@ -34,32 +38,11 @@
   <a href="https://skills.sh/xingkongliang/skills-manager"><img src="https://skills.sh/b/xingkongliang/skills-manager" alt="manage-skills on skills.sh" /></a>
 </p>
 
-<p align="center">
-  <img src="assets/demo/library.png" width="800" alt="Skills Manager Library" />
-</p>
-
-<p align="center"><strong>Install Skills</strong></p>
-<p align="center"><img src="assets/demo/install-skills.png" width="800" alt="Install Skills" /></p>
-
-<p align="center"><strong>My Skills (curation)</strong></p>
-<p align="center"><img src="assets/demo/library.png" width="800" alt="My Skills library" /></p>
-
-<p align="center"><strong>Inventory (harness observation)</strong></p>
-<p align="center"><img src="assets/demo/global-workspace.png" width="800" alt="Inventory" /></p>
-
-<p align="center"><strong>Project Workspace</strong></p>
-<p align="center"><img src="assets/demo/project-workspace.png" width="800" alt="Project workspace" /></p>
-
-<p align="center"><strong>Settings</strong></p>
-<p align="center"><img src="assets/demo/settings.png" width="800" alt="Settings" /></p>
+> The current V1.1 screenshots are being recaptured; the behavior documented below is authoritative.
 
 ## Features
 
-<p align="center">
-  <img src="assets/diagram-concept-map.png" width="640" alt="Concept map: Library, Preset, My Skills, Inventory, Project" />
-</p>
-
-- **Manage `.agents`; observe Harnesses** — Skills install only into the canonical roots (`~/.agents/skills`, `<repo>/.agents/skills`). Harnesses (Claude Code, Codex, Cursor, …) are discovery sources shown under **Inventory**; the app does not deploy into harness-specific folders.
+- **Manage Agent skills and MCP; observe Harnesses** — Skills install only into the canonical roots (`~/.agents/skills`, `<repo>/.agents/skills`). Harnesses (Claude Code, Codex, Cursor, …) are discovery sources shown under **Inventory**; the app does not deploy into harness-specific folders.
 - **Unified skill library** — Install skills from Git repos, local folders, or `.zip` / `.skill` archives into the canonical library. Metadata (SQLite, cache, logs) stays under `~/.skills-manager`.
 - **My Skills** — Browse and curate the library; organize **presets** (curation groups) with membership toggles and ordering. Preset membership does not write harness files.
 - **Inventory** — Read-only view of what each harness already discovers (skills + MCP), including native `.agents` consumers.
@@ -104,7 +87,7 @@ Every installer ships the CLI inside the app — see [Where the binary lives](#w
 
 ## Let your agents manage skills
 
-Claude Code, Codex, Cursor and the rest can drive Skills Manager through the [`manage-skills`](skills/manage-skills/SKILL.md) skill / CLI — install and curate the canonical library rather than writing into an agent folder behind its back. That keeps source metadata, preset membership, and update tracking intact.
+Claude Code, Codex, Cursor and the rest can drive AgentDock through the [`manage-skills`](skills/manage-skills/SKILL.md) skill / CLI — install and curate the canonical library rather than writing into an agent folder behind its back. That keeps source metadata, preset membership, and update tracking intact.
 
 It is also an ordinary published skill, so it can be installed without the app:
 
@@ -197,19 +180,19 @@ npm run -s cli -- --skills-root /path/to/my-skills --json skills list
 
 #### Where the binary lives
 
-At startup the app publishes a copy of its own CLI to `~/.skills-manager/bin/skills-manager-cli`, always matching the running app, so agents can find it without anything on your PATH. A `.version` stamp beside it is written only after the copy is verified and removed before each republish, so a copy that failed — a binary held open on Windows, say — is never presented as usable.
+At startup the app publishes a copy of its own CLI to `~/.skills-manager/bin/agentdock-cli`, always matching the running app, so agents can find it without anything on your PATH. A `.version` stamp beside it is written only after the copy is verified and removed before each republish, so a copy that failed — a binary held open on Windows, say — is never presented as usable. The legacy `skills-manager-cli` path remains a compatibility fallback for older agents.
 
 Putting the CLI on your *own* PATH, for typing commands yourself, is separate:
 
 ```bash
 npm run cli:install
 # equivalent to:
-# cargo install --path src-tauri --bin skills-manager-cli --locked --force
+# cargo install --path src-tauri --bin agentdock-cli --bin skills-manager-cli --locked --force
 ```
 
-This drops the binary at `~/.cargo/bin/skills-manager-cli`. Re-run after pulling updates to refresh it.
+This installs the new binary at `~/.cargo/bin/agentdock-cli` and keeps the legacy `skills-manager-cli` name available. Re-run after pulling updates to refresh them.
 
-Official releases also publish standalone CLI binaries for macOS arm64/x64, Windows x64, and Linux x64. Download the matching `skills-manager-cli-*` asset, make it executable on macOS/Linux, and place it on PATH.
+Official releases publish `agentdock-cli-*` assets for macOS arm64/x64, Windows x64, and Linux x64/arm64. Download the matching asset, make it executable on macOS/Linux, and place it on PATH; legacy `skills-manager-cli-*` assets are also retained for compatibility.
 
 #### Concurrent use with the desktop app
 

@@ -1,4 +1,7 @@
-//! The copy of `skills-manager-cli` that agents are told to run.
+//! The copy of `agentdock-cli` that agents are told to run.
+//! The historical `skills-manager-cli` bundle name is accepted as a
+//! compatibility fallback; the storage root itself remains `.skills-manager`
+//! so existing metadata and locks are not orphaned by the product rename.
 //!
 //! The CLI already ships inside the desktop bundle — Tauri packages every
 //! `[[bin]]` of the crate — but nothing puts it anywhere an agent can find it.
@@ -28,13 +31,18 @@
 //! bridge must not be used, whether or not a binary is sitting there. It is a
 //! small text file, so it can still be removed when the locked binary cannot.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::central_repo;
 
 const BRIDGE_BIN_NAME: &str = if cfg!(windows) {
+    "agentdock-cli.exe"
+} else {
+    "agentdock-cli"
+};
+const LEGACY_BRIDGE_BIN_NAME: &str = if cfg!(windows) {
     "skills-manager-cli.exe"
 } else {
     "skills-manager-cli"
@@ -51,6 +59,13 @@ pub fn bridge_path() -> PathBuf {
     bridge_dir().join(BRIDGE_BIN_NAME)
 }
 
+/// The pre-rename bridge path. We keep it populated with the same verified
+/// binary so an older `manage-skills` skill cannot accidentally run an old
+/// implementation after the shared version stamp is refreshed.
+fn legacy_bridge_path() -> PathBuf {
+    bridge_dir().join(LEGACY_BRIDGE_BIN_NAME)
+}
+
 fn stamp_path() -> PathBuf {
     bridge_dir().join(".version")
 }
@@ -61,14 +76,19 @@ fn bundled_cli() -> Result<PathBuf> {
     let dir = exe
         .parent()
         .context("the running executable has no parent directory")?;
-    let candidate = dir.join(BRIDGE_BIN_NAME);
-    if !candidate.is_file() {
-        bail!(
-            "this build does not ship {BRIDGE_BIN_NAME} next to the app binary ({})",
-            dir.display()
-        );
+    let candidates = [
+        dir.join(BRIDGE_BIN_NAME),
+        dir.join(LEGACY_BRIDGE_BIN_NAME),
+    ];
+    for candidate in candidates {
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
     }
-    Ok(candidate)
+    bail!(
+        "this build does not ship {BRIDGE_BIN_NAME} or the legacy {LEGACY_BRIDGE_BIN_NAME} next to the app binary ({})",
+        dir.display()
+    );
 }
 
 /// An empty stamp counts as no stamp — that is how `invalidate_bridge` disables
@@ -107,15 +127,26 @@ fn invalidate_bridge() -> Result<()> {
         return Ok(());
     }
     log::warn!("cli bridge: could not truncate {}", stamp.display());
-    let binary = bridge_path();
-    match std::fs::remove_file(&binary) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(anyhow::Error::new(e).context(format!(
-            "cannot invalidate the published CLI: neither {} nor {} could be removed",
+
+    // If the stamp itself cannot be made untrusted, remove both executable
+    // names. Leaving either old path behind could make an older skill trust a
+    // stale binary against the surviving stamp.
+    let mut failures = Vec::new();
+    for binary in [bridge_path(), legacy_bridge_path()] {
+        match std::fs::remove_file(&binary) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => failures.push(format!("{}: {e}", binary.display())),
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "cannot invalidate the published CLI: {} could not be removed ({})",
             stamp.display(),
-            binary.display()
-        ))),
+            failures.join("; ")
+        ))
     }
 }
 
@@ -162,7 +193,8 @@ fn verify(path: &Path, expected_version: &str) -> Result<()> {
     Ok(())
 }
 
-/// Publish the bundled CLI to the bridge path, replacing whatever is there.
+/// Publish the bundled CLI to the current and legacy bridge paths, replacing
+/// whatever is there.
 ///
 /// Best-effort by contract: every failure leaves the stamp absent and is
 /// logged, and the caller carries on. The app must start whether or not an
@@ -178,7 +210,10 @@ fn ensure_bridge_inner(app_version: &str) -> Result<PathBuf> {
     // Fast path: this version already published and still present. Checked
     // before anything is removed so an ordinary launch does not spend 15 MB of
     // copying, and so a running agent's binary is not disturbed for no reason.
-    if read_stamp().as_deref() == Some(app_version) && bridge_path().is_file() {
+    if read_stamp().as_deref() == Some(app_version)
+        && bridge_path().is_file()
+        && legacy_bridge_path().is_file()
+    {
         return Ok(bridge_path());
     }
     publish_from(&bundled_cli()?, app_version)
@@ -222,12 +257,42 @@ fn publish_from(source: &Path, app_version: &str) -> Result<PathBuf> {
         )
     })?;
 
+    // Keep the old executable name in sync as well. The legacy skill reads
+    // the same `.version` stamp, so leaving the old file untouched would make
+    // it trust a stale implementation after a successful rename.
+    let legacy_target = legacy_bridge_path();
+    let legacy_staged = dir.join(format!(".{LEGACY_BRIDGE_BIN_NAME}.staged"));
+    let _ = std::fs::remove_file(&legacy_staged);
+    std::fs::copy(&target, &legacy_staged).with_context(|| {
+        format!(
+            "could not copy the verified CLI to {}",
+            legacy_staged.display()
+        )
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&legacy_staged, std::fs::Permissions::from_mode(0o755))
+            .context("could not make the legacy CLI staged copy executable")?;
+    }
+    if let Err(e) = verify(&legacy_staged, app_version) {
+        let _ = std::fs::remove_file(&legacy_staged);
+        return Err(e);
+    }
+    std::fs::rename(&legacy_staged, &legacy_target).with_context(|| {
+        format!(
+            "could not replace {} (it may be in use)",
+            legacy_target.display()
+        )
+    })?;
+
     std::fs::write(stamp_path(), app_version)
         .with_context(|| format!("could not write {}", stamp_path().display()))?;
 
     log::info!(
-        "cli bridge: published {app_version} to {}",
-        target.display()
+        "cli bridge: published {app_version} to {} (legacy alias at {})",
+        target.display(),
+        legacy_target.display()
     );
     Ok(target)
 }
@@ -245,8 +310,8 @@ mod tests {
     #[cfg(unix)]
     fn fake_cli(dir: &Path, reports: &str) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
-        let path = dir.join("skills-manager-cli");
-        std::fs::write(&path, format!("#!/bin/sh\necho 'skills-manager-cli {reports}'\n")).unwrap();
+        let path = dir.join("agentdock-cli");
+        std::fs::write(&path, format!("#!/bin/sh\necho 'agentdock-cli {reports}'\n")).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         path
     }
@@ -264,6 +329,7 @@ mod tests {
         publish_from(&source, "9.9.9").expect("a runnable copy must publish");
 
         assert!(bridge_path().is_file());
+        assert!(legacy_bridge_path().is_file());
         assert_eq!(read_stamp().as_deref(), Some("9.9.9"));
 
         central_repo::set_test_home_dir_override(None);

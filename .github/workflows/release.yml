@@ -9,8 +9,30 @@ on:
 permissions:
   contents: write
 
+env:
+  # Keep this in sync with the updater endpoint and runtime release links.
+  # Publishing a tag from a fork without updating those URLs would create
+  # assets that installed clients cannot discover.
+  RELEASE_SOURCE_REPOSITORY: xingkongliang/skills-manager
+
 jobs:
+  validate-release-source:
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    name: Validate release source
+    steps:
+      - name: Match the configured updater repository
+        env:
+          EXPECTED_REPOSITORY: ${{ env.RELEASE_SOURCE_REPOSITORY }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.repository }}" != "$EXPECTED_REPOSITORY" ]; then
+            echo "::error::This workflow is pinned to $EXPECTED_REPOSITORY, but the tag is in ${{ github.repository }}. Update the updater/runtime URLs and RELEASE_SOURCE_REPOSITORY together before releasing from another repository."
+            exit 1
+          fi
+
   build:
+    needs: validate-release-source
     strategy:
       fail-fast: false
       matrix:
@@ -89,7 +111,7 @@ jobs:
         run: >-
           cargo build --release
           --manifest-path src-tauri/Cargo.toml
-          --bin skills-manager-cli
+          --bin agentdock-cli --bin skills-manager-cli
           --target ${{ matrix.target }}
 
       - name: Extract changelog for current version
@@ -116,7 +138,7 @@ jobs:
           fi
           {
             echo "body<<EOF"
-            echo "## Skills Manager ${{ github.ref_name }}"
+            echo "## AgentDock ${{ github.ref_name }}"
             echo ""
             echo "发布日期：\`${RELEASE_DATE}\`"
             echo "${RANGE_LINE}"
@@ -210,7 +232,7 @@ jobs:
           APPLE_API_KEY: ${{ startsWith(matrix.platform, 'macos') && secrets.APPLE_API_KEY || '' }}
         with:
           tagName: v__VERSION__
-          releaseName: 'Skills Manager v__VERSION__'
+          releaseName: 'AgentDock v__VERSION__'
           releaseBody: ${{ steps.changelog.outputs.body }}
           # Publish only after every platform is verified. v1.29.0 shipped with
           # Windows and Linux assets while both macOS legs were still notarizing,
@@ -231,6 +253,10 @@ jobs:
             echo "=== Verifying $label: $app ==="
             if [ ! -d "$app" ]; then
               echo "Expected app bundle not found at $app" >&2
+              return 1
+            fi
+            if [ ! -x "$app/Contents/MacOS/skills-manager" ]; then
+              echo "Expected transitional main binary at $app/Contents/MacOS/skills-manager" >&2
               return 1
             fi
             codesign --verify --deep --strict --verbose=2 "$app"
@@ -259,7 +285,7 @@ jobs:
           }
 
           BUNDLE_DIR="src-tauri/target/${{ matrix.target }}/release/bundle/macos"
-          verify_bundle "built bundle" "$BUNDLE_DIR/skills-manager.app"
+          verify_bundle "built bundle" "$BUNDLE_DIR/AgentDock.app"
 
           # The .app.tar.gz — not the .app or the .dmg — is what the in-app
           # updater downloads and unpacks over the running install, so it is the
@@ -339,7 +365,7 @@ jobs:
             -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security list-keychains -d user -s "$KEYCHAIN_PATH"
 
-          CLI_PATH="src-tauri/target/${{ matrix.target }}/release/skills-manager-cli"
+          CLI_PATH="src-tauri/target/${{ matrix.target }}/release/agentdock-cli"
           codesign --force --options runtime --timestamp \
             --sign "$APPLE_SIGNING_IDENTITY" "$CLI_PATH"
           codesign --verify --strict --verbose=2 "$CLI_PATH"
@@ -353,7 +379,7 @@ jobs:
             echo "Hardened runtime is not enabled on the CLI" >&2
             exit 1
           }
-          CLI_ARCHIVE="$RUNNER_TEMP/skills-manager-cli-${{ matrix.label }}.zip"
+          CLI_ARCHIVE="$RUNNER_TEMP/agentdock-cli-${{ matrix.label }}.zip"
           ditto -c -k --keepParent "$CLI_PATH" "$CLI_ARCHIVE"
           NOTARY_RESULT="$(xcrun notarytool submit "$CLI_ARCHIVE" \
             --key "$APPLE_API_KEY_PATH" \
@@ -378,17 +404,26 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${{ matrix.platform }}" == "windows-latest" ]]; then
-            CLI_PATH="src-tauri/target/${{ matrix.target }}/release/skills-manager-cli.exe"
-            CLI_ASSET="skills-manager-cli-${{ matrix.label }}.exe"
+            CLI_PATH="src-tauri/target/${{ matrix.target }}/release/agentdock-cli.exe"
+            CLI_ASSET="agentdock-cli-${{ matrix.label }}.exe"
+            LEGACY_ASSET="skills-manager-cli-${{ matrix.label }}.exe"
           else
-            CLI_PATH="src-tauri/target/${{ matrix.target }}/release/skills-manager-cli"
-            CLI_ASSET="skills-manager-cli-${{ matrix.label }}"
+            CLI_PATH="src-tauri/target/${{ matrix.target }}/release/agentdock-cli"
+            CLI_ASSET="agentdock-cli-${{ matrix.label }}"
+            LEGACY_ASSET="skills-manager-cli-${{ matrix.label }}"
           fi
           CLI_UPLOAD="$RUNNER_TEMP/$CLI_ASSET"
           cp "$CLI_PATH" "$CLI_UPLOAD"
           gh release upload "${{ github.ref_name }}" \
             --repo "${{ github.repository }}" \
             "$CLI_UPLOAD" --clobber
+
+          # Keep the historical asset name during the compatibility window.
+          LEGACY_UPLOAD="$RUNNER_TEMP/$LEGACY_ASSET"
+          cp "$CLI_PATH" "$LEGACY_UPLOAD"
+          gh release upload "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            "$LEGACY_UPLOAD" --clobber
 
   verify-updater-assets:
     needs: build
@@ -433,12 +468,25 @@ jobs:
 
           fail=0
           for cli_asset in \
+            agentdock-cli-macOS-arm64 \
+            agentdock-cli-macOS-x64 \
+            agentdock-cli-Windows-x64.exe \
+            agentdock-cli-Linux-x64 \
+            agentdock-cli-Linux-arm64; do
+            if ! echo "$asset_names" | grep -qx "$cli_asset"; then
+              echo "Missing CLI release asset: ${cli_asset}" >&2
+              fail=1
+            fi
+          done
+
+          for legacy_asset in \
             skills-manager-cli-macOS-arm64 \
             skills-manager-cli-macOS-x64 \
             skills-manager-cli-Windows-x64.exe \
-            skills-manager-cli-Linux-x64; do
-            if ! echo "$asset_names" | grep -qx "$cli_asset"; then
-              echo "Missing CLI release asset: ${cli_asset}" >&2
+            skills-manager-cli-Linux-x64 \
+            skills-manager-cli-Linux-arm64; do
+            if ! echo "$asset_names" | grep -qx "$legacy_asset"; then
+              echo "Missing legacy CLI release asset: ${legacy_asset}" >&2
               fail=1
             fi
           done
@@ -453,7 +501,7 @@ jobs:
 
           # v1.29.0 published with no darwin entries at all because only Windows
           # and Linux were asserted here, so every shipped platform is checked now.
-          for platform in darwin-aarch64 darwin-x86_64 windows-x86_64 linux-x86_64; do
+          for platform in darwin-aarch64 darwin-x86_64 windows-x86_64 linux-x86_64 linux-aarch64; do
             if ! jq -e --arg p "$platform" '.platforms[$p].signature and .platforms[$p].url' /tmp/latest.json >/dev/null; then
               echo "latest.json is missing a signed updater entry for ${platform}" >&2
               fail=1

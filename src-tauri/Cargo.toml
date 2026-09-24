@@ -1,12 +1,13 @@
 [package]
-name = "skills-manager"
+name = "agentdock"
 version = "1.40.0"
-description = "Skills Manager - AI Agent Skills Central Manager"
+description = "AgentDock - Agent skills and MCP resource manager"
 authors = ["tianliang"]
 license = "MIT"
 edition = "2021"
 rust-version = "1.77.2"
-default-run = "skills-manager"
+default-run = "agentdock"
+autobins = false
 
 [features]
 # Historical harness-deployment tests are opt-in until legacy target rows
@@ -16,6 +17,21 @@ legacy-harness-deploy-tests = []
 [lib]
 name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "agentdock"
+path = "src/main.rs"
+
+[[bin]]
+name = "agentdock-cli"
+path = "src/bin/agentdock-cli.rs"
+
+# Keep the historical executable available for one compatibility window.
+[[bin]]
+name = "skills-manager-cli"
+path = "src/bin/skills-manager-cli.rs"
+test = false
+bench = false
 
 [build-dependencies]
 tauri-build = { version = "2.5.4", features = [] }

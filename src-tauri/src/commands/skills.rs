@@ -2170,7 +2170,7 @@ pub fn update_git_skill_internal(
         // version drops is one entry, so a file created *inside* it afterwards
         // does not change the list; approving `outputs/` approves the subtree. It cannot close the window
         // between this scan and the removal itself: the repo lock holds off
-        // Skills Manager, not the agent processes writing into these very
+        // AgentDock, not the agent processes writing into these very
         // directories. Narrowing that further needs the directories frozen
         // before the scan, not another scan.
         let approval = removal_approval_token(&remote_revision, &pending);

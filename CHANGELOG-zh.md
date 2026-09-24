@@ -12,6 +12,24 @@
 - **Canonical 完整性** —— Managed 删除和 skills.sh CLI 安装统一经过 canonical writer；创建项目只初始化 `<repo>/.agents/skills`；检测到 canonical 文件被本地修改时更新会暂停。
 - **可靠性** —— 项目 Inventory 改为单层只读；Git ref 查询增加超时；扫描/纳管在仓库锁内对账；前端 CI 现在执行 build、lint 和 i18n 检查。
 
+## [1.41.0] - 2026-09-23
+
+### 发布概览
+- V1 清理（P2）：移除 Harness 部署 UI 和市场安装入口；安装路径统一经过 canonical `.agents` writer；删除无用的 tray、Preset、同步代码；CLI 拒绝 deploy/undeploy/sync；项目工作区只使用 canonical 路径。
+
+### 用户可见更新
+- **移除 Harness 部署 UI** —— Global Workspace / WorkspaceView、Preset 应用栏、批量同步到 Agent 对话框、Agent 控制设置卡片和 Install Skills 市场入口均已移除。Skills 只写入用户或项目的 `.agents/skills`；Harness 仅通过 Inventory 观察，不再被写入。
+- **项目详情只使用 canonical 路径** —— `get_project_skills` 只读取 `<repo>/.agents/skills`；文档、更新、删除和导出都作用于同一 canonical 记录；Add Skills 面板不再要求选择 Agent；每个 Agent 的状态点和 `ProjectAgentTargets` / `exportAgents` 已移除。
+- **移除 Backup 导航和页面** —— Git backup 命令仍保留在设置和首次运行恢复流程中；当前版本侧边栏不再有 Backup 页面。
+- **Preset 只负责整理** —— Preset 成员关系用于组织技能库（`/my-skills` 深层链接）；托盘不再提供面向 Agent 的 Preset 应用操作。
+
+### 开发者与治理更新
+- **AgentDock 重命名** —— 产品、包、桌面 bundle、主 CLI 和当前图标统一更名为 `AgentDock` / `agentdock-cli`。现有元数据路径、同步协议标识、签名身份、安装器升级标识以及 `skills-manager-cli` 可执行文件在过渡期间继续兼容。
+- **安装统一（P2.2）** —— App 和 CLI 的 Git/本地安装统一经过 `confirm_git_install_inner` / `canonical::install_skill_dir*`（`replace=false` 返回 `target_conflict`）。CLI Git 安装不会在内部路径之外持有 RepoLock；scenario 成员关系在释放锁后修复。
+- **移除死代码（P2.3）** —— 删除 `commands/browse.rs`、`commands/sync.rs`、`apply_preset_from_tray` / tray schedule、`installer::install_from_git_dir`，以及不再使用的 `git_backup`、`scanner`、`tool_adapters`、`sync_metadata`、`agent_workspace` 辅助代码；将 #363 共享目录回归测试移入 `scenario_service`。
+- **V1 不变量闭环（P2.6）** —— 启动流程只确保默认 Preset 状态；`update_global_local_skill_from_center` 不再注册；CLI 拒绝 `skills deploy/undeploy/sync` 和 `presets apply/deactivate/deploy/undeploy`；移除 `install --sync/--sync-preset`；删除受管技能不再触碰 `target_path`；update/reimport/set-source 不再调用 `resync_copy_targets`；`pending_removals_for` 不再检查 Harness 副本；`scan.rs` 导入路径复用 `canonical::register_user_skill`。
+- **文档** —— README CLI 示例移除 deploy/undeploy/sync；`manage-skills/SKILL.md` 移除 Deploy/Legacy exclusive sync 章节，不再声称 CLI deploy 只是“被拒绝”；ARCHITECTURE 说明项目导出仅允许 `.agents/skills`；i18n 死 key 扫描结果为 502 个 key、0 个死 key。
+
 ## [1.40.0] - 2026-09-17
 
 ### 发布概览

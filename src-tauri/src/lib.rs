@@ -137,12 +137,12 @@ fn format_status_line(data: &TrayMenuData) -> String {
 fn format_tooltip(data: &TrayMenuData) -> String {
     if data.update_count > 0 {
         format!(
-            "Skills Manager · {} skills · {} agents · {} updates",
+            "AgentDock · {} skills · {} agents · {} updates",
             data.total_skills, data.coding_agent_count, data.update_count
         )
     } else {
         format!(
-            "Skills Manager · {} skills · {} agents",
+            "AgentDock · {} skills · {} agents",
             data.total_skills, data.coding_agent_count
         )
     }
@@ -164,7 +164,7 @@ fn build_tray_menu_from_data<R: tauri::Runtime>(
 
     let menu = Menu::new(app)?;
 
-    let app_name = MenuItem::with_id(app, "tray-app-name", "Skills Manager", false, None::<&str>)?;
+    let app_name = MenuItem::with_id(app, "tray-app-name", "AgentDock", false, None::<&str>)?;
     menu.append(&app_name)?;
 
     let status_line = MenuItem::with_id(
@@ -189,7 +189,7 @@ fn build_tray_menu_from_data<R: tauri::Runtime>(
 
     menu.append(&PredefinedMenuItem::separator(app)?)?;
 
-    let show_item = MenuItem::with_id(app, "show", "Open Skills Manager", true, None::<&str>)?;
+    let show_item = MenuItem::with_id(app, "show", "Open AgentDock", true, None::<&str>)?;
     menu.append(&show_item)?;
 
     let check_label = if data.check_updates_running {
@@ -603,8 +603,9 @@ pub fn run() {
             }
 
             // Publish the CLI that ships in this bundle to a fixed path so
-            // agents can drive Skills Manager without it being on PATH. A
-            // ~15 MB copy plus one `--version` run, so never on the UI thread.
+            // agents can drive AgentDock without it being on PATH. A
+            // Two ~15 MB copies (current + legacy alias) plus verification runs,
+            // so never on the UI thread.
             // The crate version, not `tauri.conf.json`'s: it is what the CLI
             // reports about itself, and the bridge verifies the copy by asking
             // it. Reading the app config here would silently disable the
