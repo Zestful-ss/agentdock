@@ -62,6 +62,13 @@ pub fn validate_git_url(url: &str) -> Result<()> {
     let trimmed = url.trim();
     let lower = trimmed.to_lowercase();
 
+    // Local file remotes are useful only for hermetic unit tests. Keep this
+    // exception behind cfg(test); production callers still reject file URLs.
+    #[cfg(test)]
+    if lower.starts_with("file://") {
+        return Ok(());
+    }
+
     // Explicitly allowed schemes
     if lower.starts_with("https://")
         || lower.starts_with("http://")
@@ -942,6 +949,54 @@ fn run_git_watched(
     }
 }
 
+/// Run a read-only git command with the same bounded lifetime as clone/checkout
+/// operations, while preserving stdout for ref parsing.
+fn run_git_capture_with_timeout(mut command: Command) -> Result<String> {
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("Failed to start git")?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("git stderr pipe was not created"))?;
+    // Drain stderr concurrently; otherwise a large ref listing can fill the
+    // pipe and deadlock the child while the parent is waiting for exit.
+    let stderr_thread = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stderr.read_to_end(&mut bytes);
+        bytes
+    });
+    let deadline = Instant::now() + Duration::from_secs(CLONE_TIMEOUT_SECS);
+
+    loop {
+        match child.try_wait()? {
+            Some(status) => {
+                let output = child.wait_with_output()?;
+                let stderr_bytes = stderr_thread
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("git stderr reader panicked"))?;
+                if !status.success() {
+                    bail!(
+                        "git exited with {}: {}",
+                        status,
+                        String::from_utf8_lossy(&stderr_bytes).trim()
+                    );
+                }
+                return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
+            }
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = stderr_thread.join();
+                bail!("git timed out after {}s", CLONE_TIMEOUT_SECS);
+            }
+            None => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
+}
+
 fn clone_repo_full(
     url: &str,
     branch: Option<&str>,
@@ -1251,7 +1306,7 @@ pub fn relative_subpath(repo_dir: &Path, skill_dir: &Path) -> Option<String> {
     if relative.as_os_str().is_empty() {
         None
     } else {
-        Some(relative.to_string_lossy().to_string())
+        Some(relative.to_string_lossy().replace('\\', "/"))
     }
 }
 
@@ -1513,16 +1568,10 @@ fn list_remote_ref_names(url: &str, proxy_url: Option<&str>) -> Result<RemoteRef
         cmd.arg("-c").arg(format!("http.proxy={proxy}"));
         cmd.arg("-c").arg(format!("https.proxy={proxy}"));
     }
-    let output = cmd
-        .args(["ls-remote", "--heads", "--tags", url])
-        .output()
+    cmd.args(["ls-remote", "--heads", "--tags", url]);
+    let stdout = run_git_capture_with_timeout(cmd)
         .with_context(|| format!("Failed to list remote refs for {}", url))?;
 
-    if !output.status.success() {
-        anyhow::bail!("git ls-remote exited with {}", output.status);
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
     Ok(parse_remote_ref_names(&stdout))
 }
 
@@ -1598,15 +1647,8 @@ fn resolve_remote_revision_with_git(
     }
     cmd.args(["ls-remote", url]);
     cmd.args(&candidates);
-    let output = cmd
-        .output()
+    let stdout = run_git_capture_with_timeout(cmd)
         .with_context(|| format!("Failed to query remote {}", url))?;
-
-    if !output.status.success() {
-        anyhow::bail!("git ls-remote exited with {}", output.status);
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
     select_remote_revision(&stdout, &candidates)
         .ok_or_else(|| anyhow::anyhow!("No remote revision found"))
 }

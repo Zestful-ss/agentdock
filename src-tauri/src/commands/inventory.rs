@@ -85,6 +85,7 @@ pub async fn adopt_skill_to_user(
                     content_hash: hash,
                     source_type: "adopted".to_string(),
                     source_ref: Some(source.display().to_string()),
+                    ..Default::default()
                 },
             )
             .map_err(anyhow::Error::from)?;
@@ -263,6 +264,7 @@ pub async fn run_legacy_migration(
                         content_hash: hash,
                         source_type: "migrated".to_string(),
                         source_ref: Some(entry.legacy_path.clone()),
+                        ..Default::default()
                     },
                 )?;
             }

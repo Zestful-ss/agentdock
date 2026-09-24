@@ -30,17 +30,34 @@ pub fn expand_windows_path(template: &str) -> PathBuf {
     PathBuf::from(value)
 }
 
-/// Case-folded, slash-normalized key for Windows path identity.
+/// Platform-aware path identity used by the managed index.
+///
+/// Windows paths are case-insensitive and accept both separators. Unix paths
+/// are case-sensitive and may legally contain a backslash, so applying the
+/// Windows normalization there would merge distinct skills.
 pub fn identity_key(path: &Path) -> String {
-    let raw = path.to_string_lossy().replace('/', "\\");
-    let mut key = raw.to_ascii_lowercase();
-    while key.contains("\\\\") {
-        key = key.replace("\\\\", "\\");
+    #[cfg(windows)]
+    {
+        let raw = path.to_string_lossy().replace('/', "\\");
+        let mut key = raw.to_ascii_lowercase();
+        while key.contains("\\\\") {
+            key = key.replace("\\\\", "\\");
+        }
+        if let Ok(canon) = path.canonicalize() {
+            return canon
+                .to_string_lossy()
+                .replace('/', "\\")
+                .to_ascii_lowercase();
+        }
+        key.trim_end_matches('\\').to_string()
     }
-    if let Ok(canon) = path.canonicalize() {
-        return canon.to_string_lossy().replace('/', "\\").to_ascii_lowercase();
+    #[cfg(not(windows))]
+    {
+        if let Ok(canon) = path.canonicalize() {
+            return canon.to_string_lossy().into_owned();
+        }
+        path.to_string_lossy().into_owned()
     }
-    key.trim_end_matches('\\').to_string()
 }
 
 pub fn same_path(a: &Path, b: &Path) -> bool {

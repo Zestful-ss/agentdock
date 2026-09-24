@@ -92,6 +92,41 @@ fn is_link(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// A fully-built staged skill directory that has not touched the live
+/// destination yet.
+pub struct StagedSkillDir {
+    pub path: PathBuf,
+    pub hash: String,
+}
+
+/// Build a validated skill directory beside `final_path` without changing
+/// `final_path`. Callers can inspect removals or seek approval before calling
+/// [`swap_dir_staged`].
+pub fn stage_skill_dir(source: &Path, final_path: &Path) -> Result<StagedSkillDir, AppError> {
+    if !source.is_dir() {
+        return Err(AppError::not_found("Skill directory not found"));
+    }
+    if !skill_metadata::is_valid_skill_dir(source) {
+        return Err(AppError::invalid_input(
+            "Source directory does not contain SKILL.md",
+        ));
+    }
+
+    let staged = staged_sibling_for(final_path);
+    let _ = remove_path_if_exists(&staged);
+    let built = (|| {
+        super::installer::copy_skill_dir(source, &staged).map_err(AppError::io)?;
+        content_hash::hash_directory_strict(&staged).map_err(AppError::io)
+    })();
+    match built {
+        Ok(hash) => Ok(StagedSkillDir { path: staged, hash }),
+        Err(err) => {
+            let _ = remove_path_if_exists(&staged);
+            Err(err)
+        }
+    }
+}
+
 /// Copy `source` into `dest` via a staged sibling and return the staged hash.
 ///
 /// - `dest` missing → staged is renamed into place; a failed rename cleans up.
@@ -169,6 +204,24 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("SKILL.md"), format!("---\nname: {dir_name}\n---\n{body}")).unwrap();
         dir
+    }
+
+    #[test]
+    fn stage_skill_dir_builds_without_touching_the_live_destination() {
+        let tmp = tempdir().unwrap();
+        let source = make_source(tmp.path(), "src", "v2");
+        let dest = tmp.path().join("final");
+        install_via_stage(&source, &dest, false).unwrap();
+        fs::write(dest.join("SKILL.md"), "---\nname: final\n---\nlive v1\n").unwrap();
+
+        let staged = stage_skill_dir(&source, &dest).unwrap();
+        assert!(staged.path.starts_with(tmp.path()));
+        assert!(fs::read_to_string(dest.join("SKILL.md"))
+            .unwrap()
+            .contains("live v1"));
+        assert!(fs::read_to_string(staged.path.join("SKILL.md"))
+            .unwrap()
+            .contains("v2"));
     }
 
     #[test]

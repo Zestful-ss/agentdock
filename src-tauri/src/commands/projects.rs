@@ -9,7 +9,9 @@ use tauri::State;
 
 use crate::core::skill_store::{ProjectRecord, SkillRecord, SkillStore};
 use crate::core::timing::should_log_first_or_slow;
-use crate::core::{canonical, content_hash, error::AppError, project_scanner, skill_metadata, sync_engine, sync_metadata, tool_adapters};
+use crate::core::{canonical, content_hash, error::AppError, project_scanner, skill_metadata, sync_metadata};
+#[cfg(test)]
+use crate::core::sync_engine;
 
 #[derive(Serialize, Default)]
 pub struct SyncHealthDto {
@@ -52,46 +54,7 @@ fn canonical_skill_config() -> project_scanner::AgentSkillConfig {
     }
 }
 
-fn agent_skill_configs(store: &SkillStore) -> Vec<project_scanner::AgentSkillConfig> {
-    let mut grouped: Vec<(String, Vec<(String, String)>)> = Vec::new();
-    for adapter in tool_adapters::all_tool_adapters(store) {
-        let project_dir = adapter.project_relative_skills_dir().to_string();
-        if project_dir.is_empty() {
-            continue;
-        }
-        if let Some((_, agents)) = grouped.iter_mut().find(|(dir, _)| *dir == project_dir) {
-            agents.push((adapter.key, adapter.display_name));
-        } else {
-            grouped.push((project_dir, vec![(adapter.key, adapter.display_name)]));
-        }
-    }
-
-    grouped
-        .into_iter()
-        .filter_map(|(relative_skills_dir, agents)| {
-            let (key, first_display_name) = agents.first()?.clone();
-            let display_name = if agents.len() == 1 {
-                first_display_name
-            } else {
-                agents
-                    .into_iter()
-                    .map(|(_, display_name)| display_name)
-                    .collect::<Vec<_>>()
-                    .join(" / ")
-            };
-            Some(project_scanner::AgentSkillConfig {
-                key,
-                display_name,
-                relative_skills_dir,
-            })
-        })
-        .collect()
-}
-
-fn read_workspace_skills(
-    rec: &ProjectRecord,
-    _configs: &[project_scanner::AgentSkillConfig],
-) -> Vec<project_scanner::ProjectSkillInfo> {
+fn read_workspace_skills(rec: &ProjectRecord) -> Vec<project_scanner::ProjectSkillInfo> {
     // V1: one canonical root only (`<repo>/.agents/skills`). Linked workspaces
     // resolve the same way as writes (`canonical::resolve_project_root`), so
     // read and document/update/delete always hit the same row.
@@ -107,12 +70,8 @@ fn resolve_canonical_skills_roots(rec: &ProjectRecord) -> (PathBuf, Option<PathB
 
 /// Convert a project record into its DTO, folding the copies of one logical
 /// skill across agents together by relative path.
-fn project_to_dto(
-    rec: &ProjectRecord,
-    all_managed: &[SkillRecord],
-    configs: &[project_scanner::AgentSkillConfig],
-) -> ProjectDto {
-    let skills = read_workspace_skills(rec, configs);
+fn project_to_dto(rec: &ProjectRecord, all_managed: &[SkillRecord]) -> ProjectDto {
+    let skills = read_workspace_skills(rec);
     let mut grouped_statuses: HashMap<String, String> = HashMap::new();
 
     for skill in &skills {
@@ -203,6 +162,7 @@ pub(crate) fn ensure_dir_within_root(path: &Path, root: &Path) -> Result<(), App
     Ok(())
 }
 
+#[cfg(test)]
 fn remove_workspace_skill_target(path: &Path) -> Result<(), AppError> {
     sync_engine::remove_target(path).map_err(AppError::io)
 }
@@ -211,6 +171,7 @@ fn remove_workspace_skill_target(path: &Path) -> Result<(), AppError> {
 // (and including) `root`. Stops at the first non-empty directory or any
 // other error. `fs::remove_dir` only succeeds on empty directories, so this
 // will never delete a directory that still holds skills.
+#[cfg(test)]
 fn cleanup_empty_dirs_up_to(start: &Path, root: &Path) {
     let Ok(root_canonical) = std::fs::canonicalize(root) else {
         return;
@@ -236,6 +197,7 @@ fn cleanup_empty_dirs_up_to(start: &Path, root: &Path) {
     }
 }
 
+#[cfg(test)]
 fn remove_symlink_entry(path: &Path) -> Result<(), AppError> {
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(m) => m,
@@ -250,6 +212,7 @@ fn remove_symlink_entry(path: &Path) -> Result<(), AppError> {
     sync_engine::remove_target(path).map_err(AppError::io)
 }
 
+#[cfg(test)]
 fn set_project_skill_enabled_state(
     skills_dir: &Path,
     disabled_dir: &Path,
@@ -320,6 +283,7 @@ fn set_project_skill_enabled_state(
     Ok(())
 }
 
+#[cfg(test)]
 fn ensure_distinct_linked_workspace_roots(
     skills_root: &Path,
     disabled_root: &Path,
@@ -528,11 +492,10 @@ pub async fn get_projects(store: State<'_, Arc<SkillStore>>) -> Result<Vec<Proje
         let start = Instant::now();
         let records = store.get_all_projects().map_err(AppError::db)?;
         let all_managed = store.get_all_skills().map_err(AppError::db)?;
-        let configs = agent_skill_configs(&store);
         let count = records.len();
         let dtos: Vec<ProjectDto> = records
             .iter()
-            .map(|r| project_to_dto(r, &all_managed, &configs))
+            .map(|r| project_to_dto(r, &all_managed))
             .collect();
         let elapsed_ms = start.elapsed().as_millis();
         if should_log_first_or_slow(&GET_PROJECTS_FIRST_CALL, elapsed_ms, 100) {
@@ -543,6 +506,14 @@ pub async fn get_projects(store: State<'_, Arc<SkillStore>>) -> Result<Vec<Proje
     .await?
 }
 
+fn initialize_canonical_project_root(path: &Path) -> Result<PathBuf, AppError> {
+    let project_path = std::fs::canonicalize(path)
+        .map_err(|_| AppError::invalid_input("Directory does not exist"))?;
+    let skills_dir = crate::core::paths::project_agents_skills_dir(&project_path);
+    std::fs::create_dir_all(&skills_dir)?;
+    Ok(project_path)
+}
+
 #[tauri::command]
 pub async fn add_project(
     store: State<'_, Arc<SkillStore>>,
@@ -550,17 +521,7 @@ pub async fn add_project(
 ) -> Result<ProjectDto, AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let project_path = Path::new(&path);
-        if !project_path.is_dir() {
-            return Err(AppError::invalid_input("Directory does not exist"));
-        }
-        let claude_dir = project_path.join(".claude");
-        let skills_dir = claude_dir.join("skills");
-        let disabled_dir = claude_dir.join("skills-disabled");
-
-        // Support initializing an empty project directory as a managed project.
-        std::fs::create_dir_all(&skills_dir)?;
-        std::fs::create_dir_all(&disabled_dir)?;
+        let project_path = initialize_canonical_project_root(Path::new(&path))?;
 
         let name = project_path
             .file_name()
@@ -571,7 +532,7 @@ pub async fn add_project(
         let record = ProjectRecord {
             id: uuid::Uuid::new_v4().to_string(),
             name,
-            path: path.clone(),
+            path: project_path.to_string_lossy().to_string(),
             workspace_type: "project".to_string(),
             linked_agent_key: None,
             linked_agent_name: None,
@@ -583,84 +544,7 @@ pub async fn add_project(
 
         store.insert_project(&record).map_err(AppError::db)?;
         let all_managed = store.get_all_skills().map_err(AppError::db)?;
-        let configs = agent_skill_configs(&store);
-        Ok(project_to_dto(&record, &all_managed, &configs))
-    })
-    .await?
-}
-
-#[tauri::command]
-pub async fn add_linked_workspace(
-    store: State<'_, Arc<SkillStore>>,
-    name: String,
-    path: String,
-    disabled_path: Option<String>,
-) -> Result<ProjectDto, AppError> {
-    let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let name = name.trim().to_string();
-        if name.is_empty() {
-            return Err(AppError::invalid_input("Workspace name is required"));
-        }
-
-        let skills_root = PathBuf::from(path.trim());
-        if !skills_root.is_dir() {
-            return Err(AppError::invalid_input("Skills directory does not exist"));
-        }
-
-        let disabled_path = disabled_path
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string);
-        let disabled_path = if let Some(disabled) = disabled_path {
-            let disabled_root = PathBuf::from(&disabled);
-            if !disabled_root.is_dir() {
-                return Err(AppError::invalid_input(
-                    "Disabled skills directory does not exist",
-                ));
-            }
-            ensure_distinct_linked_workspace_roots(&skills_root, &disabled_root)?;
-            Some(disabled)
-        } else {
-            let mut disabled_root = skills_root.clone();
-            let derived = disabled_root
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(|name| format!("{}-disabled", name));
-            match derived {
-                Some(name) => {
-                    disabled_root.set_file_name(name);
-                    match std::fs::create_dir_all(&disabled_root) {
-                        Ok(()) => {
-                            ensure_distinct_linked_workspace_roots(&skills_root, &disabled_root)?;
-                            Some(disabled_root.to_string_lossy().to_string())
-                        }
-                        Err(_) => None,
-                    }
-                }
-                None => None,
-            }
-        };
-
-        let now = chrono::Utc::now().timestamp_millis();
-        let record = ProjectRecord {
-            id: uuid::Uuid::new_v4().to_string(),
-            name: name.clone(),
-            path: skills_root.to_string_lossy().to_string(),
-            workspace_type: "linked".to_string(),
-            linked_agent_key: Some(slugify_skill_dir_name(&name)),
-            linked_agent_name: Some(name),
-            disabled_path,
-            sort_order: 0,
-            created_at: now,
-            updated_at: now,
-        };
-
-        store.insert_project(&record).map_err(AppError::db)?;
-        let all_managed = store.get_all_skills().map_err(AppError::db)?;
-        let configs = agent_skill_configs(&store);
-        Ok(project_to_dto(&record, &all_managed, &configs))
+        Ok(project_to_dto(&record, &all_managed))
     })
     .await?
 }
@@ -683,19 +567,18 @@ pub async fn reorder_projects(
 }
 
 #[tauri::command]
-pub async fn scan_projects(
-    root: String,
-    store: State<'_, Arc<SkillStore>>,
-) -> Result<Vec<String>, AppError> {
-    let store = store.inner().clone();
+pub async fn scan_projects(root: String) -> Result<Vec<String>, AppError> {
     tauri::async_runtime::spawn_blocking(move || {
         let root_path = Path::new(&root);
         if !root_path.is_dir() {
             return Err(AppError::invalid_input("Directory does not exist"));
         }
-        let configs = agent_skill_configs(&store);
+        // Project discovery is canonical-only. Harness-specific project paths
+        // are observation sources, not project membership criteria.
         Ok(project_scanner::scan_projects_in_dir(
-            root_path, 4, &configs,
+            root_path,
+            4,
+            &[canonical_skill_config()],
         ))
     })
     .await?
@@ -713,8 +596,7 @@ pub async fn get_project_skills(
             .map_err(AppError::db)?
             .ok_or_else(|| AppError::not_found("Workspace not found"))?;
 
-        let configs = agent_skill_configs(&store);
-        let mut skills = read_workspace_skills(&record, &configs);
+        let mut skills = read_workspace_skills(&record);
 
         let all_managed = store.get_all_skills().unwrap_or_default();
         let tags_map = store.get_tags_map().unwrap_or_default();
@@ -745,19 +627,13 @@ pub async fn get_project_skill_document(
     tauri::async_runtime::spawn_blocking(move || {
         ensure_safe_skill_relative_path(&skill_relative_path)?;
 
-        let record = store
-            .get_project_by_id(&project_id)
-            .map_err(AppError::db)?
-            .ok_or_else(|| AppError::not_found("Workspace not found"))?;
-
-        // V1: one canonical root; the relative path is the identity of the row.
-        let (skills_root, _) = resolve_canonical_skills_roots(&record);
-        let skill_dir = skills_root.join(&skill_relative_path);
-        ensure_dir_within_root(&skill_dir, &skills_root)?;
-        if !skill_dir.is_dir() {
-            return Err(AppError::not_found("Skill directory not found"));
-        }
-        let skill_dir = skill_dir;
+        // V1: one canonical root; validate the exact existing directory with
+        // the same path guard used by managed writes.
+        let skill_dir = canonical::resolve_existing_project_skill(
+            &store,
+            &project_id,
+            &skill_relative_path,
+        )?;
 
         let candidates = ["SKILL.md", "skill.md", "CLAUDE.md", "README.md"];
         for candidate in &candidates {
@@ -807,8 +683,7 @@ fn import_project_skill_to_center_blocking(
         .map_err(AppError::db)?
         .ok_or_else(|| AppError::not_found("Workspace not found"))?;
 
-    let configs = agent_skill_configs(store);
-    let skills = read_workspace_skills(&record, &configs);
+    let skills = read_workspace_skills(&record);
     let skill = skills
         .iter()
         .find(|s| s.relative_path == skill_relative_path)
@@ -892,6 +767,7 @@ fn import_project_skill_info(
                 content_hash: hash,
                 source_type: "local".to_string(),
                 source_ref: Some(skill.path.clone()),
+                ..Default::default()
             },
         )
         .map_err(anyhow::Error::from)?;
@@ -951,8 +827,7 @@ pub async fn update_project_skill_from_center(
             .map_err(AppError::db)?
             .ok_or_else(|| AppError::not_found("Workspace not found"))?;
 
-        let configs = agent_skill_configs(&store);
-        let skills = read_workspace_skills(&record, &configs);
+        let skills = read_workspace_skills(&record);
         let skill = skills
             .iter()
             .find(|s| s.relative_path == skill_relative_path)
@@ -1029,17 +904,32 @@ pub async fn delete_project_skill(
 mod tests {
     use super::{
         classify_sync_status, ensure_distinct_linked_workspace_roots, find_best_center_match,
-        import_project_skill_info, import_project_skill_to_center_blocking, project_to_dto,
-        remove_workspace_skill_target, set_project_skill_enabled_state,
+        import_project_skill_info, import_project_skill_to_center_blocking,
+        initialize_canonical_project_root, project_to_dto, remove_workspace_skill_target,
+        set_project_skill_enabled_state,
     };
     use crate::core::content_hash;
     use crate::core::error::ErrorKind;
-    use crate::core::project_scanner::{AgentSkillConfig, ProjectSkillInfo};
+    use crate::core::project_scanner::ProjectSkillInfo;
     use crate::core::skill_store::{ProjectRecord, SkillRecord, SkillStore};
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::sync::MutexGuard;
     use tempfile::{TempDir, tempdir};
+
+    #[test]
+    fn adding_a_project_initializes_only_the_canonical_agents_root() {
+        let tmp = tempdir().unwrap();
+        let project = tmp.path().join("repo");
+        fs::create_dir_all(&project).unwrap();
+
+        let canonical = initialize_canonical_project_root(&project).unwrap();
+
+        assert!(canonical.join(".agents").join("skills").is_dir());
+        assert!(!canonical.join(".claude").exists());
+        assert!(!canonical.join(".claude").join("skills").exists());
+        assert!(!canonical.join(".claude").join("skills-disabled").exists());
+    }
 
     fn sample_managed_skill(
         central_path: String,
@@ -1244,8 +1134,7 @@ mod tests {
         assert_eq!(matched.id, "spaced-id");
     }
 
-    /// The sidebar project count dedupes by logical skill rather than adding
-    /// up per-agent copies.
+    /// The sidebar project count reads only the canonical project root.
     #[test]
     fn project_to_dto_counts_logical_skills_not_agent_copies() {
         let tmp = tempdir().unwrap();
@@ -1266,20 +1155,7 @@ mod tests {
             created_at: 0,
             updated_at: 0,
         };
-        let configs = vec![
-            AgentSkillConfig {
-                key: "claude_code".to_string(),
-                display_name: "Claude Code".to_string(),
-                relative_skills_dir: ".claude/skills".to_string(),
-            },
-            AgentSkillConfig {
-                key: "codex".to_string(),
-                display_name: "Codex".to_string(),
-                relative_skills_dir: ".codex/skills".to_string(),
-            },
-        ];
-
-        let dto = project_to_dto(&record, &[], &configs);
+        let dto = project_to_dto(&record, &[]);
 
         assert_eq!(dto.skill_count, 1);
         assert_eq!(dto.sync_health.project_only, 1);

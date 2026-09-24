@@ -18,16 +18,6 @@ fn refresh_tray_menu_best_effort(app: &tauri::AppHandle) {
     }
 }
 
-/// Sync a skill's files to all enabled tool adapter directories for the given preset.
-/// Only performs sync if the preset is the currently active one.
-pub(crate) fn sync_skill_to_active_preset(
-    store: &SkillStore,
-    scenario_id: &str,
-    skill_id: &str,
-) -> Result<(), AppError> {
-    scenario_service::sync_skill_to_active_scenario(store, scenario_id, skill_id)
-}
-
 #[derive(Debug, Serialize)]
 pub struct PresetDto {
     pub id: String,
@@ -152,19 +142,15 @@ pub fn create_preset_internal(
     Ok(record)
 }
 
-/// Preserve the desktop app's legacy create-and-select behavior while the CLI
-/// uses [`create_preset_internal`] as a pure organization operation.
+/// Create a preset and make it the active *view* without touching any harness
+/// files. Presets are organization metadata only in V1.
 fn create_and_activate_preset_internal(
     store: &SkillStore,
     name: &str,
     description: Option<&str>,
     icon: Option<&str>,
 ) -> Result<ScenarioRecord, AppError> {
-    let previous_active_id = store.get_active_scenario_id().map_err(AppError::db)?;
     let record = create_preset_internal(store, name, description, icon)?;
-    if let Some(previous_id) = previous_active_id.as_deref() {
-        unsync_scenario_skills(store, previous_id)?;
-    }
     store
         .set_active_scenario(&record.id)
         .map_err(AppError::db)?;
@@ -220,7 +206,7 @@ pub async fn delete_preset(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        delete_preset_with_active_fallback_internal(&store, &id)
+        delete_preset_internal(&store, &id)
     })
     .await?;
     if result.is_ok() {
@@ -245,41 +231,6 @@ pub fn delete_preset_internal(store: &SkillStore, id: &str) -> Result<(), AppErr
         sync_metadata::write_all_from_db_unlocked(store)
     })
     .map_err(AppError::db)
-}
-
-/// Preserve the desktop app's legacy active-preset transition. The CLI calls
-/// [`delete_preset_internal`] directly so deleting an organization object does
-/// not implicitly undeploy skills.
-fn delete_preset_with_active_fallback_internal(
-    store: &SkillStore,
-    id: &str,
-) -> Result<(), AppError> {
-    scenario_service::ensure_scenario_exists(store, id)?;
-    let was_active = store
-        .get_active_scenario_id()
-        .map_err(AppError::db)?
-        .as_deref()
-        == Some(id);
-
-    if was_active {
-        unsync_scenario_skills(store, id)?;
-    }
-
-    delete_preset_internal(store, id)?;
-
-    if was_active {
-        let remaining = store.get_all_scenarios().map_err(AppError::db)?;
-        if let Some(first) = remaining.first() {
-            store.set_active_scenario(&first.id).map_err(AppError::db)?;
-            // The preset is already deleted and the fallback already active, so
-            // a refusal here cannot undo any of that — report it, don't fail.
-            for refusal in sync_scenario_skills(store, &first.id)? {
-                log::warn!("fallback preset sync skipped a target: {refusal}");
-            }
-        }
-    }
-
-    Ok(())
 }
 
 #[tauri::command]
@@ -413,18 +364,12 @@ pub async fn reorder_preset_skills(
 
 // ── Internal helpers ──
 
+#[cfg(test)]
 pub(crate) fn sync_scenario_skills(
     store: &SkillStore,
     scenario_id: &str,
 ) -> Result<Vec<scenario_service::TargetConflict>, AppError> {
     scenario_service::sync_scenario_skills(store, scenario_id)
-}
-
-pub(crate) fn unsync_scenario_skills(
-    store: &SkillStore,
-    scenario_id: &str,
-) -> Result<(), AppError> {
-    scenario_service::unsync_scenario_skills(store, scenario_id)
 }
 
 #[cfg(test)]

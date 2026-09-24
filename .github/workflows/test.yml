@@ -5,10 +5,22 @@ on:
     branches: [main]
     paths:
       - 'src-tauri/**'
+      - 'src/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.ts'
+      - 'tsconfig*.json'
+      - 'scripts/**'
       - '.github/workflows/test.yml'
   pull_request:
     paths:
       - 'src-tauri/**'
+      - 'src/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.ts'
+      - 'tsconfig*.json'
+      - 'scripts/**'
       - '.github/workflows/test.yml'
 
 permissions:
@@ -55,6 +67,31 @@ jobs:
         if: runner.os == 'Windows'
         continue-on-error: true
         run: taskkill /f /im vctip.exe
+
+  frontend:
+    runs-on: ubuntu-latest
+    name: Frontend checks
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Lint frontend
+        run: npm run lint
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Check i18n references
+        run: node scripts/find_dead_i18n.cjs
 
   # Linux is otherwise only compiled by the release workflow (tag push), so a
   # Linux-only compile break — e.g. the keyring secret-service backend with

@@ -5,6 +5,13 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [未发布]
+
+### 开发者与治理更新
+- **V1.1 加固** —— 工具开关和路径修改现在只影响发现配置；Preset 增删改查不再同步 Harness；移除关联项目工作区和项目 `skills-disabled` 入口。
+- **Canonical 完整性** —— Managed 删除和 skills.sh CLI 安装统一经过 canonical writer；创建项目只初始化 `<repo>/.agents/skills`；检测到 canonical 文件被本地修改时更新会暂停。
+- **可靠性** —— 项目 Inventory 改为单层只读；Git ref 查询增加超时；扫描/纳管在仓库锁内对账；前端 CI 现在执行 build、lint 和 i18n 检查。
+
 ## [1.40.0] - 2026-09-17
 
 ### 发布概览

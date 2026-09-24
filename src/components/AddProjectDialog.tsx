@@ -13,15 +13,13 @@ interface Props {
 
 export function AddProjectDialog({ open, onClose, onAdded }: Props) {
   const { t } = useTranslation();
-  const [tab, setTab] = useState<"manual" | "scan" | "linked">("manual");
+  const [tab, setTab] = useState<"manual" | "scan">("manual");
   const [scanRoot, setScanRoot] = useState("");
   const [scanning, setScanning] = useState(false);
   const [scanResults, setScanResults] = useState<string[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [adding, setAdding] = useState(false);
   const [scanned, setScanned] = useState(false);
-  const [linkedName, setLinkedName] = useState("");
-  const [linkedPath, setLinkedPath] = useState("");
 
   useEffect(() => {
     if (!open) return;
@@ -32,8 +30,6 @@ export function AddProjectDialog({ open, onClose, onAdded }: Props) {
     setSelected(new Set());
     setAdding(false);
     setScanned(false);
-    setLinkedName("");
-    setLinkedPath("");
   }, [open]);
 
   if (!open) return null;
@@ -101,20 +97,6 @@ export function AddProjectDialog({ open, onClose, onAdded }: Props) {
     if (dir) setScanRoot(dir as string);
   };
 
-  const handleAddLinkedWorkspace = async () => {
-    if (!linkedName.trim() || !linkedPath.trim()) return;
-    setAdding(true);
-    try {
-      await api.addLinkedWorkspace(linkedName.trim(), linkedPath.trim());
-      await onAdded();
-      onClose();
-    } catch {
-      // error handled by toast in parent
-    } finally {
-      setAdding(false);
-    }
-  };
-
   const inputClass =
     "w-full bg-background border border-border-subtle rounded-lg px-3 py-2 text-[13px] text-secondary focus:outline-none focus:border-border transition-all placeholder-faint";
 
@@ -136,7 +118,7 @@ export function AddProjectDialog({ open, onClose, onAdded }: Props) {
 
         {/* Tabs */}
         <div className="flex gap-1 mb-4 p-0.5 bg-background rounded-lg border border-border-subtle">
-          {(["manual", "scan", "linked"] as const).map((key) => (
+          {(["manual", "scan"] as const).map((key) => (
             <button
               key={key}
               onClick={() => setTab(key)}
@@ -147,13 +129,7 @@ export function AddProjectDialog({ open, onClose, onAdded }: Props) {
                   : "text-muted hover:text-secondary"
               )}
             >
-              {t(
-                key === "manual"
-                  ? "project.tabManual"
-                  : key === "scan"
-                    ? "project.tabScan"
-                    : "project.tabLinked"
-              )}
+              {t(key === "manual" ? "project.tabManual" : "project.tabScan")}
             </button>
           ))}
         </div>
@@ -172,7 +148,7 @@ export function AddProjectDialog({ open, onClose, onAdded }: Props) {
               {adding ? t("common.loading") : t("project.addManual")}
             </button>
           </div>
-        ) : tab === "scan" ? (
+        ) : (
           <div className="space-y-3">
             <div className="flex gap-2">
               <input
@@ -269,49 +245,6 @@ export function AddProjectDialog({ open, onClose, onAdded }: Props) {
                 </div>
               </>
             )}
-          </div>
-        ) : (
-          <div className="space-y-3">
-            <p className="text-[13px] text-tertiary">
-              {t("project.addLinkedHint")}
-            </p>
-            <input
-              type="text"
-              value={linkedName}
-              onChange={(e) => setLinkedName(e.target.value)}
-              placeholder={t("project.linkedNamePlaceholder")}
-              className={inputClass}
-            />
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={linkedPath}
-                onChange={(e) => setLinkedPath(e.target.value)}
-                placeholder={t("project.linkedPathPlaceholder")}
-                className={cn(inputClass, "flex-1")}
-              />
-              <button
-                onClick={async () => {
-                  const dir = await dialogOpen({ directory: true, multiple: false });
-                  if (dir) setLinkedPath(dir as string);
-                }}
-                className="px-2.5 rounded-lg border border-border-subtle bg-background text-muted hover:text-secondary hover:border-border transition-all outline-none"
-                title={t("project.selectSkillsDir")}
-              >
-                <FolderOpen className="w-4 h-4" />
-              </button>
-            </div>
-            <p className="text-[12px] leading-5 text-muted">
-              {t("project.linkedDisabledPathHint")}
-            </p>
-            <button
-              onClick={handleAddLinkedWorkspace}
-              disabled={adding || !linkedName.trim() || !linkedPath.trim()}
-              className="flex items-center justify-center gap-2 w-full px-3 py-2.5 rounded-lg border border-dashed border-border-subtle hover:border-border bg-background text-[13px] text-tertiary hover:text-secondary transition-all outline-none disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <FolderOpen className="w-4 h-4 text-muted" />
-              {adding ? t("common.loading") : t("project.addLinkedWorkspace")}
-            </button>
           </div>
         )}
       </div>

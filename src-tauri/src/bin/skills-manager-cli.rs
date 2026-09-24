@@ -1643,29 +1643,55 @@ fn install_skillssh_action(
             cmd::resolve_skill_dir(&temp_dir, None, Some(&skill_id_field)).map_err(map_app_err)?;
         let revision = git_fetcher::get_head_revision(&temp_dir)?;
         let source_ref = format!("{}/{}", source, skill_id_field);
-        let (install_name, destination) =
+        let (install_name, _destination) =
             cmd::resolve_skillssh_install_target(store, &source_ref, &skill_id_field)
                 .map_err(map_app_err)?;
-        let install_result =
-            installer::install_skill_dir_to_destination(&skill_dir, &install_name, &destination)?;
-        let metadata = cmd::InstallSourceMetadata {
+        let root = canonical::resolve_user_root().map_err(map_app_err)?;
+        let destination = canonical::install_skill_dir_as(
+            &skill_dir,
+            &root,
+            &install_name,
+            false,
+        )
+        .map_err(map_app_err)?;
+        let content_hash = content_hash::hash_directory(&destination)?;
+        let metadata = skill_metadata::parse_skill_md(&destination);
+        let install_result = installer::InstallResult {
+            name: install_name.clone(),
+            description: metadata.description.clone(),
+            central_path: destination,
+            content_hash,
+        };
+        let source_subpath = git_fetcher::relative_subpath(&temp_dir, &skill_dir);
+        let registration = canonical::UserSkillRegistration {
+            name: install_name.clone(),
+            description: metadata.description,
+            central_path: install_result.central_path.clone(),
+            content_hash: install_result.content_hash.clone(),
             source_type: "skillssh".to_string(),
             source_ref: Some(source_ref),
             source_ref_resolved: Some(repo_url.clone()),
-            source_subpath: git_fetcher::relative_subpath(&temp_dir, &skill_dir),
+            source_subpath,
             source_branch: None,
             source_revision: Some(revision.clone()),
             remote_revision: Some(revision),
-            update_status: "up_to_date".to_string(),
+            update_status: Some("up_to_date".to_string()),
         };
+        let skill_id = canonical::register_user_skill(store, &registration)
+            .map_err(map_app_err)?;
+        if let Some(scenario_id) = active_scenario {
+            store.add_skill_to_scenario(scenario_id, &skill_id)?;
+        }
         let central_path = install_result.central_path.to_string_lossy().to_string();
-        let skill_id =
-            cmd::store_installed_skill_unlocked(store, &install_result, &metadata, active_scenario)
-                .map_err(map_app_err)?;
         Ok((skill_id, install_name, central_path))
     })();
     git_fetcher::cleanup_temp(&temp_dir);
     let (skill_id, install_name, central_path) = result?;
+    // The canonical registration writes metadata before the optional preset
+    // membership is added. Refresh it after releasing the operation lock.
+    if active_scenario.is_some() {
+        sync_metadata::write_all_from_db(store)?;
+    }
     Ok((skill_id, install_name, central_path, "skillssh".to_string()))
 }
 
@@ -2180,7 +2206,21 @@ fn run_adopt(
     for c in &candidates {
         let dir = PathBuf::from(&c.path);
         let _lock = RepoLock::acquire_foreground("cli adopt")?;
-        let result = installer::install_from_local(&dir, None)?;
+        let resolved_root = canonical::resolve_user_root().map_err(map_app_err)?;
+        let installed = canonical::install_skill_dir(&dir, &resolved_root, false)
+            .map_err(map_app_err)?;
+        let installed_name = installed
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| "skill".to_string());
+        let installed_meta = skill_metadata::parse_skill_md(&installed);
+        let installed_hash = content_hash::hash_directory_strict(&installed)?;
+        let result = installer::InstallResult {
+            name: installed_name,
+            description: installed_meta.description,
+            central_path: installed,
+            content_hash: installed_hash,
+        };
         let metadata = if let Some((clone_url, subpath, branch, original_url)) = &resolved_git {
             cmd::InstallSourceMetadata {
                 source_type: "git".to_string(),
