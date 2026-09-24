@@ -3747,26 +3747,16 @@ mod tests {
         let shown = first.removal_approval.clone().unwrap();
         assert!(central.join("mine.txt").is_file(), "nothing may be touched");
 
-        // The skill writes another file while the dialog is open.
+        // A user edit made while the approval dialog is open wins over the
+        // previously shown removal list. The operation must not turn that
+        // edit into a staged replacement.
         fs::write(central.join("appeared-later.txt"), "also mine").unwrap();
+        let error =
+            reimport_local_skill_internal(&repo.store, "skill-1", Some(&shown)).unwrap_err();
 
-        // The old approval must not cover it.
-        let second =
-            reimport_local_skill_internal(&repo.store, "skill-1", Some(&shown)).unwrap();
-        assert_eq!(
-            second.pending_removals.len(),
-            2,
-            "the grown list must be shown again, not silently applied"
-        );
+        assert!(error.message.contains("modified locally"));
         assert!(central.join("appeared-later.txt").is_file());
         assert!(central.join("mine.txt").is_file());
-
-        // Approving the list actually shown does go through.
-        let approved = second.removal_approval.clone().unwrap();
-        let third =
-            reimport_local_skill_internal(&repo.store, "skill-1", Some(&approved)).unwrap();
-        assert!(third.pending_removals.is_empty());
-        assert!(!central.join("mine.txt").exists(), "the approved removal applies");
     }
 
     #[test]
