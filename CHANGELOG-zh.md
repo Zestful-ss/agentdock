@@ -10,6 +10,9 @@
 ### AgentDock 本机化资源面
 - 统一 Skills/MCP Inventory 保留来源、ownership、重复项、自定义只读路径，以及每个资源的隐藏、忽略和备注状态。
 - Adopt 冲突先展示 `SKILL.md` 差异再确认 Replace；本地修改过的受管 Skill 不会被覆盖。
+- MCP 隐藏/忽略/备注按单条 Inventory row 隔离，桌面端与 CLI 共用带状态的 Inventory builder。
+- 自定义只读路径不能指向用户或项目的 canonical `.agents/skills` 库；旧设置中的无效路径会被安全忽略。
+- 数据库 v10 清理已退役的 deployment 投影和 linked workspace 行；CLI Skill/Preset 状态不再报告或筛选 deployment 状态。
 - 移除 Git 备份、多设备合并、应用内更新、托盘后台、启动 CLI bridge、文件 watcher、通用技能库导出、繁体中文和 Dashboard。
 - 保留独立的 `agentdock-cli` 与 `inventory` 命令供本机自动化使用。
 

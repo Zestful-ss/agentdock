@@ -18,6 +18,51 @@ use crate::core::sync_metadata;
 const CUSTOM_READ_ONLY_PATHS_KEY: &str = "custom_read_only_skill_paths";
 const RESOURCE_STATES_KEY: &str = "inventory_resource_states";
 
+fn is_same_or_descendant(path: &std::path::Path, root: &std::path::Path) -> bool {
+    let path_key = paths::identity_key(path);
+    let root_key = paths::identity_key(root);
+    if path_key == root_key {
+        return true;
+    }
+    let separator = std::path::MAIN_SEPARATOR;
+    let prefix = if root_key.ends_with(separator) {
+        root_key
+    } else {
+        format!("{root_key}{separator}")
+    };
+    path_key.starts_with(&prefix)
+}
+
+fn is_canonical_custom_read_only_path(
+    store: &SkillStore,
+    path: &std::path::Path,
+) -> Result<bool, AppError> {
+    let mut canonical_roots = vec![
+        crate::core::central_repo::skills_dir_override()
+            .unwrap_or_else(paths::user_agents_skills_dir),
+    ];
+    for project in store.get_all_projects().map_err(AppError::db)? {
+        canonical_roots.push(paths::project_agents_skills_dir(std::path::Path::new(
+            &project.path,
+        )));
+    }
+    Ok(canonical_roots
+        .iter()
+        .any(|root| is_same_or_descendant(path, root)))
+}
+
+fn validate_custom_read_only_path(
+    store: &SkillStore,
+    path: &std::path::Path,
+) -> Result<(), AppError> {
+    if is_canonical_custom_read_only_path(store, path)? {
+        return Err(AppError::invalid_input(
+            "Custom read-only paths cannot be the canonical user or project skills library",
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ResourceState {
     #[serde(default)]
@@ -36,8 +81,17 @@ pub struct AdoptDiff {
     pub target_path: String,
 }
 
-fn resource_key(kind: &str, path: &str) -> String {
-    format!("{}:{}", kind, paths::identity_key(std::path::Path::new(path)))
+fn resource_key(kind: &str, identity: &str) -> String {
+    if kind == "mcp" {
+        // MCP identity includes harness, server name, and config identity.
+        // A single settings.json can contain many independent MCP resources.
+        format!("mcp:{}", identity)
+    } else {
+        format!(
+            "skill:{}",
+            paths::identity_key(std::path::Path::new(identity))
+        )
+    }
 }
 
 fn load_resource_states(store: &SkillStore) -> Result<BTreeMap<String, ResourceState>, AppError> {
@@ -75,20 +129,21 @@ fn decorate_skill_rows(
 
 fn decorate_mcp_rows(rows: &mut [McpInventoryRow], states: &BTreeMap<String, ResourceState>) {
     for row in rows {
-        if let Some(source) = row.sources.first() {
-            if let Some(state) = states.get(&resource_key("mcp", &source.source_path)) {
-                row.ignored = state.ignored;
-                row.hidden = state.hidden;
-                row.note = state.note.clone();
-            }
+        if let Some(state) = states.get(&resource_key("mcp", &row.id)) {
+            row.ignored = state.ignored;
+            row.hidden = state.hidden;
+            row.note = state.note.clone();
         }
     }
 }
 
+/// Update state for one Inventory row. Skills use their normalized path as the
+/// identity; MCP rows use the full row id so servers sharing a config remain
+/// independent.
 pub fn update_inventory_resource_state(
     store: &SkillStore,
     resource_kind: &str,
-    path: &str,
+    identity: &str,
     ignored: Option<bool>,
     hidden: Option<bool>,
     note: Option<String>,
@@ -97,7 +152,7 @@ pub fn update_inventory_resource_state(
         return Err(AppError::invalid_input("Unknown inventory resource kind"));
     }
     let mut states = load_resource_states(store)?;
-    let key = resource_key(resource_kind, path);
+    let key = resource_key(resource_kind, identity);
     let state = states.entry(key).or_default();
     if let Some(value) = ignored {
         state.ignored = value;
@@ -129,6 +184,11 @@ pub fn custom_read_only_paths(store: &SkillStore) -> Result<Vec<PathBuf>, AppErr
             continue;
         }
         let path = paths::expand_windows_path(trimmed);
+        // Drop stale entries written by older builds instead of showing the
+        // canonical library twice in Inventory.
+        if is_canonical_custom_read_only_path(store, &path)? {
+            continue;
+        }
         let key = paths::identity_key(&path);
         if seen.insert(key) {
             result.push(path);
@@ -137,7 +197,7 @@ pub fn custom_read_only_paths(store: &SkillStore) -> Result<Vec<PathBuf>, AppErr
     Ok(result)
 }
 
-pub fn normalize_custom_read_only_paths(
+pub fn validated_custom_read_only_paths(
     store: &SkillStore,
     values: Vec<String>,
 ) -> Result<Vec<String>, AppError> {
@@ -149,11 +209,20 @@ pub fn normalize_custom_read_only_paths(
             continue;
         }
         let path = paths::expand_windows_path(trimmed);
+        validate_custom_read_only_path(store, &path)?;
         let key = paths::identity_key(&path);
         if seen.insert(key) {
             result.push(path.to_string_lossy().to_string());
         }
     }
+    Ok(result)
+}
+
+pub fn normalize_custom_read_only_paths(
+    store: &SkillStore,
+    values: Vec<String>,
+) -> Result<Vec<String>, AppError> {
+    let result = validated_custom_read_only_paths(store, values)?;
     let encoded = serde_json::to_string(&result).map_err(AppError::internal)?;
     store
         .set_setting(CUSTOM_READ_ONLY_PATHS_KEY, &encoded)
@@ -161,18 +230,29 @@ pub fn normalize_custom_read_only_paths(
     Ok(result)
 }
 
+pub fn build_skill_inventory(store: &SkillStore) -> Result<Vec<SkillInventoryRow>, AppError> {
+    let custom_paths = custom_read_only_paths(store)?;
+    let states = load_resource_states(store)?;
+    let mut rows = mcp_inventory::discover_skills_with_custom_paths(&custom_paths);
+    decorate_skill_rows(&mut rows, &states);
+    Ok(rows)
+}
+
+pub fn build_mcp_inventory(store: &SkillStore) -> Result<Vec<McpInventoryRow>, AppError> {
+    let custom_paths = custom_read_only_paths(store)?;
+    let states = load_resource_states(store)?;
+    let entries = mcp_inventory::discover_mcp_with_custom_paths(&custom_paths);
+    let mut rows = mcp_inventory::inventory_rows(&entries);
+    decorate_mcp_rows(&mut rows, &states);
+    Ok(rows)
+}
+
 #[tauri::command]
 pub async fn get_skill_inventory(
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<Vec<SkillInventoryRow>, AppError> {
     let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let custom_paths = custom_read_only_paths(&store)?;
-        let states = load_resource_states(&store)?;
-        let mut rows = mcp_inventory::discover_skills_with_custom_paths(&custom_paths);
-        decorate_skill_rows(&mut rows, &states);
-        Ok(rows)
-    })
+    tauri::async_runtime::spawn_blocking(move || build_skill_inventory(&store))
     .await
     .map_err(|e| AppError::internal(e.to_string()))?
 }
@@ -231,14 +311,7 @@ pub async fn get_mcp_inventory(
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<Vec<McpInventoryRow>, AppError> {
     let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let custom_paths = custom_read_only_paths(&store)?;
-        let states = load_resource_states(&store)?;
-        let entries = mcp_inventory::discover_mcp_with_custom_paths(&custom_paths);
-        let mut rows = mcp_inventory::inventory_rows(&entries);
-        decorate_mcp_rows(&mut rows, &states);
-        Ok(rows)
-    })
+    tauri::async_runtime::spawn_blocking(move || build_mcp_inventory(&store))
     .await
     .map_err(|e| AppError::internal(e.to_string()))?
 }
@@ -246,7 +319,7 @@ pub async fn get_mcp_inventory(
 #[tauri::command]
 pub async fn set_inventory_resource_state(
     resource_kind: String,
-    path: String,
+    identity: String,
     ignored: Option<bool>,
     hidden: Option<bool>,
     note: Option<String>,
@@ -257,7 +330,7 @@ pub async fn set_inventory_resource_state(
         update_inventory_resource_state(
             &store,
             &resource_kind,
-            &path,
+            &identity,
             ignored,
             hidden,
             note,
@@ -347,16 +420,27 @@ pub async fn adopt_skill_to_user(
             if replace.unwrap_or(false) {
                 let name = skill_metadata::infer_skill_name(&source);
                 let candidate = resolved.root.join(canonical::sanitize_component(&name)?);
-                let candidate_string = candidate.to_string_lossy().to_string();
-                if let Some(record) = store.get_skill_by_central_path(&candidate_string)? {
-                    if let Some(baseline) = record.content_hash.as_deref() {
-                        let live = content_hash::hash_directory_strict(&candidate)
-                            .map_err(AppError::io)?;
-                        if live != baseline {
-                            return Err(anyhow::Error::from(AppError::invalid_input(
-                                "Managed skill was modified locally; replacement was not applied",
-                            )));
-                        }
+                let existing = store
+                    .get_all_skills()?
+                    .into_iter()
+                    .find(|record| {
+                        paths::same_path(
+                            std::path::Path::new(&record.central_path),
+                            &candidate,
+                        )
+                    });
+                if let Some(record) = existing {
+                    let Some(baseline) = record.content_hash.as_deref() else {
+                        return Err(anyhow::Error::from(AppError::invalid_input(
+                            "Managed skill has no recorded baseline; replacement was not applied",
+                        )));
+                    };
+                    let live = content_hash::hash_directory_strict(&candidate)
+                        .map_err(AppError::io)?;
+                    if live != baseline {
+                        return Err(anyhow::Error::from(AppError::invalid_input(
+                            "Managed skill was modified locally; replacement was not applied",
+                        )));
                     }
                 }
             }
@@ -586,4 +670,92 @@ pub fn get_canonical_roots() -> Result<CanonicalRoots, AppError> {
 pub struct CanonicalRoots {
     pub user_skills: String,
     pub native_consumers: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::error::ErrorKind;
+    use crate::core::mcp_inventory::{McpHarnessStatus, McpTransport};
+    use crate::core::skill_store::ProjectRecord;
+    use tempfile::tempdir;
+
+    fn mcp_row(id: &str, name: &str) -> McpInventoryRow {
+        McpInventoryRow {
+            id: id.to_string(),
+            name: name.to_string(),
+            sources: vec![McpHarnessStatus {
+                harness: "opencode".to_string(),
+                display_name: "OpenCode".to_string(),
+                transport: McpTransport::Stdio,
+                source_enabled: Some(true),
+                source_path: "C:/Users/test/AppData/Roaming/opencode/settings.json".to_string(),
+                configured: true,
+            }],
+            ignored: false,
+            hidden: false,
+            note: String::new(),
+        }
+    }
+
+    #[test]
+    fn canonical_path_matching_includes_descendants_but_not_siblings() {
+        let root = std::path::Path::new("/tmp/agentdock-skills");
+        let child = root.join("one");
+        let sibling = std::path::Path::new("/tmp/agentdock-other");
+        assert!(is_same_or_descendant(child.as_path(), root));
+        assert!(is_same_or_descendant(root, root));
+        assert!(!is_same_or_descendant(sibling, root));
+    }
+
+    #[test]
+    fn custom_read_only_paths_reject_a_project_canonical_library() {
+        let tmp = tempdir().unwrap();
+        let project_root = tmp.path().join("repo");
+        let canonical = project_root.join(".agents").join("skills").join("one");
+        std::fs::create_dir_all(&canonical).unwrap();
+        let store = SkillStore::new(&tmp.path().join("inventory.db")).unwrap();
+        store
+            .insert_project(&ProjectRecord {
+                id: "project-1".to_string(),
+                name: "repo".to_string(),
+                path: project_root.display().to_string(),
+                workspace_type: "project".to_string(),
+                linked_agent_key: None,
+                linked_agent_name: None,
+                disabled_path: None,
+                sort_order: 0,
+                created_at: 0,
+                updated_at: 0,
+            })
+            .unwrap();
+
+        let error = validated_custom_read_only_paths(
+            &store,
+            vec![canonical.display().to_string()],
+        )
+        .unwrap_err();
+        assert!(matches!(error.kind, ErrorKind::InvalidInput));
+    }
+
+    #[test]
+    fn mcp_state_uses_resource_id_not_config_path() {
+        let mut rows = vec![
+            mcp_row("opencode:exa:settings", "exa"),
+            mcp_row("opencode:github:settings", "github"),
+        ];
+        let mut states = BTreeMap::new();
+        states.insert(
+            resource_key("mcp", &rows[0].id),
+            ResourceState {
+                ignored: true,
+                ..ResourceState::default()
+            },
+        );
+
+        decorate_mcp_rows(&mut rows, &states);
+
+        assert!(rows[0].ignored);
+        assert!(!rows[1].ignored);
+    }
 }

@@ -117,7 +117,7 @@ Remove deletes the canonical library directory and its metadata row. Legacy Harn
 "$SM" --json skills status <skill>
 ```
 
-`skills status` reports what the library owns. Harness directories are observe-only in V1; there is no CLI path that writes them.
+`skills status` reports the local library record and discovered agent availability. It does not report or filter by deployment projections; Harness directories are observe-only in V1 and there is no CLI path that writes them.
 
 ## Inventory
 
@@ -128,6 +128,8 @@ Remove deletes the canonical library directory and its metadata row. Legacy Harn
 "$SM" --json inventory paths add C:\\Tools\\shared-skills
 "$SM" --json inventory paths remove C:\\Tools\\shared-skills --dry-run
 "$SM" --json inventory state --kind skill C:\\Users\\me\\.claude\\skills\\my-skill --ignored true
+# MCP state uses the row id, so different servers sharing one config stay independent
+"$SM" --json inventory state --kind mcp opencode:github:C:\\Users\\me\\AppData\\Roaming\\opencode\\settings.json --ignored true
 ```
 
 Inventory rows retain source and ownership. Duplicate names from different

@@ -490,7 +490,12 @@ pub async fn get_projects(store: State<'_, Arc<SkillStore>>) -> Result<Vec<Proje
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let start = Instant::now();
-        let records = store.get_all_projects().map_err(AppError::db)?;
+        let records: Vec<_> = store
+            .get_all_projects()
+            .map_err(AppError::db)?
+            .into_iter()
+            .filter(|record| record.workspace_type == "project")
+            .collect();
         let all_managed = store.get_all_skills().map_err(AppError::db)?;
         let count = records.len();
         let dtos: Vec<ProjectDto> = records
@@ -552,8 +557,15 @@ pub async fn add_project(
 #[tauri::command]
 pub async fn remove_project(store: State<'_, Arc<SkillStore>>, id: String) -> Result<(), AppError> {
     let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || store.delete_project(&id).map_err(AppError::db))
-        .await?
+    tauri::async_runtime::spawn_blocking(move || {
+        let record = store
+            .get_project_by_id(&id)
+            .map_err(AppError::db)?
+            .ok_or_else(|| AppError::not_found("Workspace not found"))?;
+        canonical::ensure_project_workspace(&record)?;
+        store.delete_project(&id).map_err(AppError::db)
+    })
+    .await?
 }
 
 #[tauri::command]
@@ -595,6 +607,7 @@ pub async fn get_project_skills(
             .get_project_by_id(&project_id)
             .map_err(AppError::db)?
             .ok_or_else(|| AppError::not_found("Workspace not found"))?;
+        canonical::ensure_project_workspace(&record)?;
 
         let mut skills = read_workspace_skills(&record);
 
@@ -682,6 +695,7 @@ fn import_project_skill_to_center_blocking(
         .get_project_by_id(project_id)
         .map_err(AppError::db)?
         .ok_or_else(|| AppError::not_found("Workspace not found"))?;
+    canonical::ensure_project_workspace(&record)?;
 
     let skills = read_workspace_skills(&record);
     let skill = skills

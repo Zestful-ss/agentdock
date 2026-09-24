@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use rusqlite::Connection;
 
 /// Current schema version. Bump this when adding a new migration.
-const LATEST_VERSION: u32 = 9;
+const LATEST_VERSION: u32 = 10;
 
 /// Run all pending migrations on the database.
 ///
@@ -56,6 +56,7 @@ fn migrate_step(conn: &Connection, from_version: u32) -> Result<()> {
         6 => migrate_v6_to_v7(conn),
         7 => migrate_v7_to_v8(conn),
         8 => migrate_v8_to_v9(conn),
+        9 => migrate_v9_to_v10(conn),
         _ => bail!("unknown migration version: {from_version}"),
     }
 }
@@ -353,6 +354,21 @@ fn migrate_v8_to_v9(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// v9 → v10: remove deployment-era projections and linked workspace rows.
+/// The canonical Skill, tag, Preset, project, and audit tables remain intact.
+fn migrate_v9_to_v10(conn: &Connection) -> Result<()> {
+    if table_exists(conn, "skill_targets")? {
+        conn.execute("DELETE FROM skill_targets", [])?;
+    }
+    if table_exists(conn, "scenario_skill_tools")? {
+        conn.execute("DELETE FROM scenario_skill_tools", [])?;
+    }
+    if table_exists(conn, "projects")? && has_column(conn, "projects", "workspace_type")? {
+        conn.execute("DELETE FROM projects WHERE workspace_type = 'linked'", [])?;
+    }
+    Ok(())
+}
+
 // ── Helpers ──
 
 fn add_column_if_missing(
@@ -379,6 +395,14 @@ fn validate_identifier(name: &str) -> Result<()> {
         anyhow::bail!("Invalid SQL identifier: {}", name);
     }
     Ok(())
+}
+
+fn table_exists(conn: &Connection, table: &str) -> Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+        rusqlite::params![table],
+        |row| row.get(0),
+    )
 }
 
 fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
@@ -598,6 +622,61 @@ mod tests {
             |r| r.get(0),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn v10_clears_retired_deployment_state_and_linked_projects() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        run_migrations(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO skills
+                (id, name, source_type, central_path, enabled, created_at, updated_at, status)
+             VALUES ('skill-1', 'Skill', 'local', '/skills/skill-1', 1, 1, 1, 'ok')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO scenarios (id, name, sort_order, created_at, updated_at)
+             VALUES ('preset-1', 'Preset', 0, 1, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO skill_targets
+                (id, skill_id, tool, target_path, mode, status)
+             VALUES ('target-1', 'skill-1', 'claude_code', '/harness/skill', 'copy', 'ok')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO scenario_skill_tools
+                (scenario_id, skill_id, tool, enabled, updated_at)
+             VALUES ('preset-1', 'skill-1', 'claude_code', 1, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO projects
+                (id, name, path, workspace_type, sort_order, created_at, updated_at)
+             VALUES ('linked-1', 'Legacy linked', '/legacy', 'linked', 0, 1, 1)",
+            [],
+        )
+        .unwrap();
+
+        conn.pragma_update(None, "user_version", 9).unwrap();
+        run_migrations(&conn).unwrap();
+
+        assert_eq!(count_rows(&conn, "skill_targets"), 0);
+        assert_eq!(count_rows(&conn, "scenario_skill_tools"), 0);
+        assert_eq!(count_rows(&conn, "projects"), 0);
+        assert_eq!(count_rows(&conn, "skills"), 1);
+        assert_eq!(count_rows(&conn, "scenarios"), 1);
+    }
+
+    fn count_rows(conn: &Connection, table: &str) -> i64 {
+        conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0))
+            .unwrap()
     }
 
     #[test]

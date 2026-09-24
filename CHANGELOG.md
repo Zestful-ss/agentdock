@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### AgentDock local-only surface
 - Unified Skills/MCP inventory now retains source, ownership, duplicate rows, custom read-only paths, and per-resource ignore/hide/note state.
 - Adopt conflicts open a `SKILL.md` diff before replacement; locally modified managed skills are not overwritten.
+- MCP ignore/hide/note state is keyed by the individual inventory row, and desktop/CLI inventory now share the same state-aware builders.
+- Custom read-only paths cannot point at a canonical user/project `.agents/skills` library; stale saved entries are ignored safely.
+- Database v10 clears retired deployment projections and linked-workspace rows; CLI skill/preset status no longer reports or filters by deployment state.
 - Git backup, multi-device merge, app updater, tray/background lifecycle, startup CLI bridge, filesystem watcher, generic library export, Traditional Chinese, and Dashboard surfaces are removed.
 - The standalone `agentdock-cli` and `inventory` commands remain available for local automation.
 

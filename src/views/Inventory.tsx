@@ -534,13 +534,13 @@ export function Inventory() {
               </button>
                 <div className="flex items-center justify-end gap-1 border-t border-border-subtle px-2 pt-1">
                   <button
-                    onClick={() => void updateResourceState("mcp", row.sources[0]?.source_path ?? "", { ignored: !row.ignored })}
+                    onClick={() => void updateResourceState("mcp", row.id, { ignored: !row.ignored })}
                     className="rounded border border-border px-2 py-1 text-[11px] text-secondary hover:bg-surface-hover"
                   >
                     {row.ignored ? "Show" : "Ignore"}
                   </button>
                   <button
-                    onClick={() => void updateResourceState("mcp", row.sources[0]?.source_path ?? "", { hidden: !row.hidden })}
+                    onClick={() => void updateResourceState("mcp", row.id, { hidden: !row.hidden })}
                     className="rounded border border-border px-2 py-1 text-[11px] text-secondary hover:bg-surface-hover"
                   >
                     {row.hidden ? "Unhide" : "Hide"}

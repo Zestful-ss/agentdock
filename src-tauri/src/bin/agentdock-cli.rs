@@ -8,7 +8,7 @@ use app_lib::commands::{
 };
 use app_lib::core::{
     app_state, audit_log::AuditDraft, canonical, central_repo, content_hash, error::AppError,
-    git_fetcher, installer, mcp_inventory, paths, repo_lock::RepoLock, scenario_service, skill_metadata,
+    git_fetcher, installer, paths, repo_lock::RepoLock, scenario_service, skill_metadata,
     skill_store::SkillStore, skillssh_api, sync_engine, sync_metadata, tool_adapters,
     tool_service,
 };
@@ -62,7 +62,8 @@ struct InventoryPathsArgs {
 struct InventoryStateArgs {
     #[arg(long)]
     kind: String,
-    path: PathBuf,
+    #[arg(value_name = "IDENTITY")]
+    identity: String,
     #[arg(long, value_name = "BOOL")]
     ignored: Option<bool>,
     #[arg(long, value_name = "BOOL")]
@@ -135,8 +136,6 @@ enum SkillsCommand {
         tags: Vec<String>,
         #[arg(long)]
         preset: Option<String>,
-        #[arg(long, value_name = "AGENT")]
-        deployed_to: Option<String>,
         #[arg(long)]
         untagged: bool,
         #[arg(long)]
@@ -207,7 +206,7 @@ enum SkillsCommand {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Show preset membership and actual per-agent deployment state.
+    /// Show the local skill record and discovered agent availability.
     Status {
         reference: String,
     },
@@ -229,7 +228,7 @@ enum SkillsCommand {
         limit: Option<usize>,
     },
     /// Re-point an installed skill at a git source in place, keeping its id,
-    /// tags, preset membership and deployments.
+    /// tags, and preset membership.
     SetSource {
         /// Skill ref (id / name / dir basename / central path)
         reference: String,
@@ -340,6 +339,8 @@ enum PresetCommand {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Deprecated: V1 refuses harness write projections. Canonical locations
+    /// are ~/.agents/skills and <repo>/.agents/skills.
     Preview {
         reference: String,
     },
@@ -375,8 +376,6 @@ enum PresetCommand {
     },
     Status {
         reference: String,
-        #[arg(long = "agent", value_name = "AGENT")]
-        agents: Vec<String>,
     },
     AddSkill {
         preset: String,
@@ -413,7 +412,6 @@ struct SkillSummary {
     source_ref: Option<String>,
     preset_ids: Vec<String>,
     presets: Vec<String>,
-    deployed_to: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -438,6 +436,22 @@ struct SkillStatusReport {
     #[serde(flatten)]
     skill: SkillSummary,
     agents: Vec<SkillAgentStatus>,
+}
+
+/// Active local status: agent discovery only, with no deployment projection.
+#[derive(Debug, Serialize)]
+struct LocalSkillAgentStatus {
+    key: String,
+    display_name: String,
+    installed: bool,
+    globally_enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct LocalSkillStatusReport {
+    #[serde(flatten)]
+    skill: SkillSummary,
+    discovered_agents: Vec<LocalSkillAgentStatus>,
 }
 
 #[derive(Debug, Serialize)]
@@ -798,26 +812,20 @@ fn run_inventory(
 ) -> anyhow::Result<()> {
     match args.command {
         InventoryCommand::Skills => {
-            let paths = inventory_cmd::custom_read_only_paths(store).map_err(map_app_err)?;
-            print_json(
-                &mcp_inventory::discover_skills_with_custom_paths(&paths),
-                json,
-            );
+            print_json(&inventory_cmd::build_skill_inventory(store).map_err(map_app_err)?, json);
         }
         InventoryCommand::Mcp => {
-            let paths = inventory_cmd::custom_read_only_paths(store).map_err(map_app_err)?;
-            let entries = mcp_inventory::discover_mcp_with_custom_paths(&paths);
-            print_json(&mcp_inventory::inventory_rows(&entries), json);
+            print_json(&inventory_cmd::build_mcp_inventory(store).map_err(map_app_err)?, json);
         }
         InventoryCommand::State(state_args) => {
-            let path = state_args.path.to_string_lossy().to_string();
+            let identity = state_args.identity.clone();
             if state_args.dry_run {
                 print_json(
                     &serde_json::json!({
                         "ok": true,
                         "dry_run": true,
                         "kind": state_args.kind,
-                        "path": path,
+                        "identity": identity,
                         "ignored": state_args.ignored,
                         "hidden": state_args.hidden,
                         "note": state_args.note,
@@ -828,7 +836,7 @@ fn run_inventory(
                 let state = inventory_cmd::update_inventory_resource_state(
                     store,
                     &state_args.kind,
-                    &path,
+                    &identity,
                     state_args.ignored,
                     state_args.hidden,
                     state_args.note,
@@ -854,7 +862,8 @@ fn run_inventory(
                     .collect::<Vec<_>>();
                 values.push(path.to_string_lossy().to_string());
                 let result = if dry_run {
-                    values
+                    inventory_cmd::validated_custom_read_only_paths(store, values)
+                        .map_err(map_app_err)?
                 } else {
                     inventory_cmd::normalize_custom_read_only_paths(store, values)
                         .map_err(map_app_err)?
@@ -873,7 +882,8 @@ fn run_inventory(
                     .map(|value| value.to_string_lossy().to_string())
                     .collect::<Vec<_>>();
                 let result = if dry_run {
-                    values
+                    inventory_cmd::validated_custom_read_only_paths(store, values)
+                        .map_err(map_app_err)?
                 } else {
                     inventory_cmd::normalize_custom_read_only_paths(store, values)
                         .map_err(map_app_err)?
@@ -896,7 +906,6 @@ fn run_skills(args: SkillsArgs, store: &SkillStore, json: bool) -> anyhow::Resul
             query,
             tags,
             preset,
-            deployed_to,
             untagged,
             no_preset,
             source,
@@ -906,7 +915,6 @@ fn run_skills(args: SkillsArgs, store: &SkillStore, json: bool) -> anyhow::Resul
                 query.as_deref(),
                 &tags,
                 preset.as_deref(),
-                deployed_to.as_deref(),
                 untagged,
                 no_preset,
                 source.as_deref(),
@@ -957,7 +965,7 @@ fn run_skills(args: SkillsArgs, store: &SkillStore, json: bool) -> anyhow::Resul
             bail!(app_lib::core::v1::POLICY_MESSAGE);
         }
         SkillsCommand::Status { reference } => {
-            print_json(&skill_status(store, &reference)?, json);
+            print_json(&skill_status_local(store, &reference)?, json);
         }
         SkillsCommand::Search { query, limit } => {
             let hits = run_search(store, &query, limit)?;
@@ -1007,7 +1015,6 @@ fn run_skills(args: SkillsArgs, store: &SkillStore, json: bool) -> anyhow::Resul
 
 fn list_skills(store: &SkillStore) -> anyhow::Result<Vec<SkillSummary>> {
     let tags_map = store.get_tags_map()?;
-    let targets = store.get_all_targets()?;
     let scenarios = store.get_all_scenarios()?;
     let scenario_lookup: std::collections::HashMap<String, String> =
         scenarios.into_iter().map(|s| (s.id, s.name)).collect();
@@ -1019,13 +1026,6 @@ fn list_skills(store: &SkillStore) -> anyhow::Result<Vec<SkillSummary>> {
             .iter()
             .filter_map(|id| scenario_lookup.get(id).cloned())
             .collect();
-        let mut deployed_to: Vec<String> = targets
-            .iter()
-            .filter(|target| target.skill_id == skill.id && target.status == "ok")
-            .map(|target| target.tool.clone())
-            .collect();
-        deployed_to.sort();
-        deployed_to.dedup();
         items.push(SkillSummary {
             id: skill.id.clone(),
             name: skill.name.clone(),
@@ -1037,7 +1037,6 @@ fn list_skills(store: &SkillStore) -> anyhow::Result<Vec<SkillSummary>> {
             source_ref: skill.source_ref.clone(),
             preset_ids,
             presets: preset_names,
-            deployed_to,
         });
     }
     Ok(items)
@@ -1049,7 +1048,6 @@ fn list_skills_filtered(
     query: Option<&str>,
     tags: &[String],
     preset_ref: Option<&str>,
-    deployed_to: Option<&str>,
     untagged: bool,
     no_preset: bool,
     source: Option<&str>,
@@ -1057,11 +1055,6 @@ fn list_skills_filtered(
     let preset_id = preset_ref
         .map(|reference| resolve_scenario(store, reference).map(|preset| preset.id))
         .transpose()?;
-    if let Some(agent) = deployed_to {
-        if tool_adapters::find_adapter_with_store(store, agent).is_none() {
-            bail!("unknown agent: {agent}");
-        }
-    }
     let query = query
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -1097,11 +1090,6 @@ fn list_skills_filtered(
             preset_id
                 .as_ref()
                 .map_or(true, |id| skill.preset_ids.contains(id))
-        })
-        .filter(|skill| {
-            deployed_to.as_ref().map_or(true, |agent| {
-                skill.deployed_to.iter().any(|key| key == agent)
-            })
         })
         .filter(|skill| {
             source.as_ref().map_or(true, |needle| {
@@ -1140,6 +1128,7 @@ fn show_skill(store: &SkillStore, reference: &str) -> anyhow::Result<SkillDetail
     })
 }
 
+#[allow(dead_code)]
 fn skill_status(store: &SkillStore, reference: &str) -> anyhow::Result<SkillStatusReport> {
     let skill = resolve_skill(store, reference)?;
     let summary = list_skills(store)?
@@ -1179,6 +1168,30 @@ fn skill_status(store: &SkillStore, reference: &str) -> anyhow::Result<SkillStat
     Ok(SkillStatusReport {
         skill: summary,
         agents,
+    })
+}
+
+fn skill_status_local(
+    store: &SkillStore,
+    reference: &str,
+) -> anyhow::Result<LocalSkillStatusReport> {
+    let skill = resolve_skill(store, reference)?;
+    let summary = list_skills(store)?
+        .into_iter()
+        .find(|item| item.id == skill.id)
+        .ok_or_else(|| anyhow!("skill summary missing"))?;
+    let discovered_agents = tool_service::list_tool_info(store)
+        .into_iter()
+        .map(|agent| LocalSkillAgentStatus {
+            key: agent.key,
+            display_name: agent.display_name,
+            installed: agent.installed,
+            globally_enabled: agent.enabled,
+        })
+        .collect();
+    Ok(LocalSkillStatusReport {
+        skill: summary,
+        discovered_agents,
     })
 }
 
@@ -2180,17 +2193,10 @@ fn run_adopt(
             None
         };
 
-    // Build exclusion set: existing central paths, sync target paths, canonicals
+    // Build exclusion set: existing central paths and the canonical root.
     let mut excluded: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     for skill in store.get_all_skills()? {
         let p = PathBuf::from(&skill.central_path);
-        excluded.insert(p.clone());
-        if let Ok(c) = p.canonicalize() {
-            excluded.insert(c);
-        }
-    }
-    for target in store.get_all_targets()? {
-        let p = PathBuf::from(&target.target_path);
         excluded.insert(p.clone());
         if let Ok(c) = p.canonicalize() {
             excluded.insert(c);
@@ -2585,20 +2591,16 @@ fn run_presets(args: PresetArgs, store: &SkillStore, json: bool) -> anyhow::Resu
                 json,
             );
         }
-        PresetCommand::Preview { reference } => {
-            let preset = resolve_scenario(store, &reference)?;
-            let preview =
-                scenario_service::preview_scenario_sync(store, &preset.id).map_err(map_app_err)?;
-            print_json(&preview, json);
-        }
-        PresetCommand::Apply { .. }
+        PresetCommand::Preview { .. }
+        | PresetCommand::Apply { .. }
         | PresetCommand::Deactivate { .. }
         | PresetCommand::Deploy { .. }
         | PresetCommand::Undeploy { .. } => {
             bail!(app_lib::core::v1::POLICY_MESSAGE);
         }
-        PresetCommand::Status { reference, agents } => {
-            print_json(&preset_status(store, &reference, &agents)?, json);
+        PresetCommand::Status { reference } => {
+            let preset = resolve_scenario(store, &reference)?;
+            print_json(&preset_info_for(store, preset)?, json);
         }
         PresetCommand::AddSkill { preset, skills } => {
             let s = resolve_scenario(store, &preset)?;
@@ -2726,6 +2728,7 @@ fn select_agent_keys_for_removal(
     Ok(selected)
 }
 
+#[allow(dead_code)]
 fn preset_status(
     store: &SkillStore,
     reference: &str,
@@ -3109,8 +3112,6 @@ mod tests {
             "frontend",
             "--preset",
             "Web Dev",
-            "--deployed-to",
-            "claude_code",
         ])
         .unwrap();
         assert!(matches!(
@@ -3120,14 +3121,20 @@ mod tests {
                     query: Some(query),
                     tags,
                     preset: Some(preset),
-                    deployed_to: Some(agent),
                     ..
                 }
             }) if query == "react"
                 && tags == vec!["frontend"]
                 && preset == "Web Dev"
-                && agent == "claude_code"
         ));
+        assert!(Cli::try_parse_from([
+            "skills-manager-cli",
+            "skills",
+            "list",
+            "--deployed-to",
+            "claude_code",
+        ])
+        .is_err());
 
         let cli = Cli::try_parse_from([
             "skills-manager-cli",

@@ -634,12 +634,12 @@ export const getMcpInventory = () =>
 
 export const setInventoryResourceState = (
   resourceKind: "skill" | "mcp",
-  path: string,
+  identity: string,
   state: Partial<InventoryResourceState>,
 ) =>
   invoke<InventoryResourceState>("set_inventory_resource_state", {
     resourceKind,
-    path,
+    identity,
     ignored: state.ignored ?? null,
     hidden: state.hidden ?? null,
     note: state.note ?? null,
