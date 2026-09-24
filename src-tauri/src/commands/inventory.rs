@@ -85,6 +85,34 @@ fn decorate_mcp_rows(rows: &mut [McpInventoryRow], states: &BTreeMap<String, Res
     }
 }
 
+pub fn update_inventory_resource_state(
+    store: &SkillStore,
+    resource_kind: &str,
+    path: &str,
+    ignored: Option<bool>,
+    hidden: Option<bool>,
+    note: Option<String>,
+) -> Result<ResourceState, AppError> {
+    if resource_kind != "skill" && resource_kind != "mcp" {
+        return Err(AppError::invalid_input("Unknown inventory resource kind"));
+    }
+    let mut states = load_resource_states(store)?;
+    let key = resource_key(resource_kind, path);
+    let state = states.entry(key).or_default();
+    if let Some(value) = ignored {
+        state.ignored = value;
+    }
+    if let Some(value) = hidden {
+        state.hidden = value;
+    }
+    if let Some(value) = note {
+        state.note = value;
+    }
+    let result = state.clone();
+    save_resource_states(store, &states)?;
+    Ok(result)
+}
+
 pub fn custom_read_only_paths(store: &SkillStore) -> Result<Vec<PathBuf>, AppError> {
     let raw = store
         .get_setting(CUSTOM_READ_ONLY_PATHS_KEY)
@@ -224,26 +252,16 @@ pub async fn set_inventory_resource_state(
     note: Option<String>,
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<ResourceState, AppError> {
-    if resource_kind != "skill" && resource_kind != "mcp" {
-        return Err(AppError::invalid_input("Unknown inventory resource kind"));
-    }
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut states = load_resource_states(&store)?;
-        let key = resource_key(&resource_kind, &path);
-        let state = states.entry(key).or_default();
-        if let Some(value) = ignored {
-            state.ignored = value;
-        }
-        if let Some(value) = hidden {
-            state.hidden = value;
-        }
-        if let Some(value) = note {
-            state.note = value;
-        }
-        let result = state.clone();
-        save_resource_states(&store, &states)?;
-        Ok(result)
+        update_inventory_resource_state(
+            &store,
+            &resource_kind,
+            &path,
+            ignored,
+            hidden,
+            note,
+        )
     })
     .await
     .map_err(|e| AppError::internal(e.to_string()))?

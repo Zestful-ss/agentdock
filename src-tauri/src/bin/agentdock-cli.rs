@@ -49,12 +49,28 @@ enum InventoryCommand {
     Skills,
     Mcp,
     Paths(InventoryPathsArgs),
+    State(InventoryStateArgs),
 }
 
 #[derive(Args, Debug)]
 struct InventoryPathsArgs {
     #[command(subcommand)]
     command: InventoryPathsCommand,
+}
+
+#[derive(Args, Debug)]
+struct InventoryStateArgs {
+    #[arg(long)]
+    kind: String,
+    path: PathBuf,
+    #[arg(long, value_name = "BOOL")]
+    ignored: Option<bool>,
+    #[arg(long, value_name = "BOOL")]
+    hidden: Option<bool>,
+    #[arg(long)]
+    note: Option<String>,
+    #[arg(long)]
+    dry_run: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -792,6 +808,34 @@ fn run_inventory(
             let paths = inventory_cmd::custom_read_only_paths(store).map_err(map_app_err)?;
             let entries = mcp_inventory::discover_mcp_with_custom_paths(&paths);
             print_json(&mcp_inventory::inventory_rows(&entries), json);
+        }
+        InventoryCommand::State(state_args) => {
+            let path = state_args.path.to_string_lossy().to_string();
+            if state_args.dry_run {
+                print_json(
+                    &serde_json::json!({
+                        "ok": true,
+                        "dry_run": true,
+                        "kind": state_args.kind,
+                        "path": path,
+                        "ignored": state_args.ignored,
+                        "hidden": state_args.hidden,
+                        "note": state_args.note,
+                    }),
+                    json,
+                );
+            } else {
+                let state = inventory_cmd::update_inventory_resource_state(
+                    store,
+                    &state_args.kind,
+                    &path,
+                    state_args.ignored,
+                    state_args.hidden,
+                    state_args.note,
+                )
+                .map_err(map_app_err)?;
+                print_json(&state, json);
+            }
         }
         InventoryCommand::Paths(paths_args) => match paths_args.command {
             InventoryPathsCommand::List => {
